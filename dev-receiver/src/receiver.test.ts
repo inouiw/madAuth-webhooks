@@ -14,7 +14,7 @@ async function start(options: Partial<ReceiverOptions> = {}) {
   server = createServer(createReceiver({ secret, log: (l) => lines.push(l), ...options }));
   await new Promise<void>((resolve) => server!.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
-  const send = (type: string, data: Record<string, unknown>, sign = true) => {
+  const send = (type: string, data: Record<string, unknown> | undefined, sign = true) => {
     const body = JSON.stringify({ type, data });
     const id = 'msg_test';
     const timestamp = Math.floor(Date.now() / 1000);
@@ -75,5 +75,12 @@ describe('dev webhook receiver', () => {
 
     expect(output()).toContain('roles.changed: ada@example.com now has admin, editor (set by grace@example.com)');
     expect(output()).toContain('roles.changed: ada@example.com now has none (set by grace@example.com)');
+  });
+
+  it('answers 400 to a signed call without data, and keeps running', async () => {
+    const { send } = await start();
+
+    expect((await send('user.signed_in', undefined)).status).toBe(400);
+    expect((await send('user.signed_in', { user: { id: 'usr_1' } })).status).toBe(204);
   });
 });

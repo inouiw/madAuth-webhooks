@@ -6,7 +6,7 @@ import { createMailer } from './handler.js';
 
 const secret = generateWebhookSecret();
 
-function event(type: string, data: Record<string, unknown>, options: { sign?: boolean; base64?: boolean } = {}): LambdaFunctionURLEvent {
+function event(type: string, data: Record<string, unknown> | undefined, options: { sign?: boolean; base64?: boolean } = {}): LambdaFunctionURLEvent {
   const body = JSON.stringify({ type, data });
   const timestamp = Math.floor(Date.now() / 1000);
   return {
@@ -80,5 +80,12 @@ describe('AWS SES mailer', () => {
 
     const input = (send.mock.calls[0][0] as unknown as SendEmailCommand).input;
     expect(input.Content!.Simple!.Subject?.Data).toBe('You already have an account on app.example.com');
+  });
+
+  it('answers 400 to a signed call without data and sends nothing', async () => {
+    const { handler, send } = setup();
+
+    expect(await handler(event('email.verify', undefined))).toEqual({ statusCode: 400 });
+    expect(send).not.toHaveBeenCalled();
   });
 });

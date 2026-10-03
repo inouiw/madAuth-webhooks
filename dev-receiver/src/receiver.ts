@@ -25,6 +25,16 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+/** The parsed call, or null if the body is not a JSON object with a string `type` and an object `data`. */
+function parseCall(body: string): Call | null {
+  try {
+    const call = JSON.parse(body) as Call | null;
+    return call && typeof call.type === 'string' && call.data && typeof call.data === 'object' ? call : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Handles madAuth's webhook calls: prints e-mails and events, and answers the sign-up check. */
 export function createReceiver(options: ReceiverOptions) {
   const log = options.log ?? ((line: string) => console.log(line));
@@ -37,18 +47,29 @@ export function createReceiver(options: ReceiverOptions) {
     if (req.method !== 'POST') return reply(405);
 
     // Verify the raw body exactly as it arrived: re-serialized JSON would not match the signature.
-    const body = await readBody(req);
+    let body: string;
+    try {
+      body = await readBody(req);
+    } catch {
+      return; // The client went away mid-request; there is no one to answer.
+    }
     if (!verifyWebhook(options.secret, req.headers, body)) {
       log('[webhook] Rejected a call with a wrong signature. Do madAuth and this receiver use the same WEBHOOK_SECRET?');
       return reply(401);
     }
-    const { type, data } = JSON.parse(body) as Call;
+    const call = parseCall(body);
+    if (!call) {
+      log('[webhook] Rejected a call whose body is not {"type": ..., "data": {...}}.');
+      return reply(400);
+    }
+    const { type, data } = call;
 
     if (type === 'email.verify' || type === 'email.reset') {
       const what = type === 'email.verify' ? 'Confirm your e-mail address' : 'Reset your password';
       log(`\n[webhook] E-mail to ${data.to}: ${what} (${data.site})`);
       log(`  Link: ${data.link}`);
-      log(`  Code: ${String(data.code).slice(0, 3)} ${String(data.code).slice(3)}\n`);
+      const code = String(data.code ?? '');
+      log(`  Code: ${code.slice(0, 3)} ${code.slice(3)}\n`);
       return reply(200);
     }
     if (type === 'email.already_registered') {

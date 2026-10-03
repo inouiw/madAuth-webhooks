@@ -24,7 +24,7 @@ function render(opts: { to: string; subject: string; intro: string; link: string
 <html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
 <p>${escapeHtml(opts.intro)}</p>
 <p><a href="${escapeHtml(opts.link)}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#fff;border-radius:6px;text-decoration:none">${escapeHtml(opts.action)}</a></p>
-${spacedCode ? `<p>Or enter this code:</p><p style="font-size:24px;font-weight:600;letter-spacing:4px">${spacedCode}</p>` : ''}
+${spacedCode ? `<p>Or enter this code:</p><p style="font-size:24px;font-weight:600;letter-spacing:4px">${escapeHtml(spacedCode)}</p>` : ''}
 <p style="color:#555">${escapeHtml(opts.outro)}</p>
 </body></html>`;
   return { to: opts.to, subject: opts.subject, text, html };

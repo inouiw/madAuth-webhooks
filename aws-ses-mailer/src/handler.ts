@@ -42,12 +42,13 @@ export function createMailer(options: MailerOptions) {
       console.warn('Rejected a call with a wrong signature. Do madAuth and this function use the same WEBHOOK_SECRET?');
       return { statusCode: 401 };
     }
-    let call: Call;
+    let call: Call | null;
     try {
-      call = JSON.parse(body) as Call;
+      call = JSON.parse(body) as Call | null;
     } catch {
       return { statusCode: 400 };
     }
+    if (!call || typeof call.type !== 'string' || !call.data || typeof call.data !== 'object') return { statusCode: 400 };
 
     const mail = mailFor(call);
     // Other calls (the sign-up check, events) are not this function's business: an empty 2xx allows them.

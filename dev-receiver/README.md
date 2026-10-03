@@ -37,7 +37,7 @@ WEBHOOK_URL=http://localhost:8790/webhook WEBHOOK_SECRET=whsec_... npm run dev
 The madAuth server only sends the types listed in its `WEBHOOK_EVENTS`. To see everything here, list them all on the server:
 
 ```
-WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered,signup.before,user.created,email.verified,password.reset,user.signed_in,user.deleted
+WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered,signup.before,user.created,email.verified,password.reset,user.signed_in
 ```
 
 ## Try the sign-up check
