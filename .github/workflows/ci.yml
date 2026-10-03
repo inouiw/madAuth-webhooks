@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        receiver: [dev-receiver, aws-ses-mailer]
+    defaults:
+      run:
+        working-directory: ${{ matrix.receiver }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.receiver }}/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
