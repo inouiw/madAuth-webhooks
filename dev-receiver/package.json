@@ -1,0 +1,25 @@
+{
+  "name": "madauth-dev-receiver",
+  "private": true,
+  "version": "0.0.0",
+  "description": "A madAuth webhook receiver for development: prints e-mails and events in the terminal.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx --env-file-if-exists=.env src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@madauth/server": ">=0.1.0 <1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
