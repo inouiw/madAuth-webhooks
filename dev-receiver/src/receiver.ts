@@ -72,8 +72,10 @@ export function createReceiver(options: ReceiverOptions) {
       log(`  Code: ${code.slice(0, 3)} ${code.slice(3)}\n`);
       return reply(200);
     }
-    if (type === 'email.already_registered') {
-      log(`\n[webhook] E-mail to ${data.to}: You already have an account (${data.site})`);
+    if (type === 'email.already_registered' || type === 'email.no_password') {
+      const what = type === 'email.no_password' ? 'You have no password to reset' : 'You already have an account';
+      const methods = Array.isArray(data.methods) ? data.methods.join(', ') : '';
+      log(`\n[webhook] E-mail to ${data.to}: ${what} (${data.site})${methods ? `, signs in with: ${methods}` : ''}`);
       log(`  Sign in: ${data.link}\n`);
       return reply(200);
     }

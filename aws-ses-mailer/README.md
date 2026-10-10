@@ -80,7 +80,7 @@ Set these on the madAuth server and restart it:
 ```
 WEBHOOK_URL=https://abc123.lambda-url.eu-central-1.on.aws/
 WEBHOOK_SECRET=<the same secret>
-WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered
+WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered,email.no_password
 ```
 
 `WEBHOOK_EVENTS` lists what this function handles: the three e-mails. madAuth then sends nothing else to it.

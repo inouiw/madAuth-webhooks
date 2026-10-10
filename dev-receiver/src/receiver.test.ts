@@ -43,6 +43,16 @@ describe('dev webhook receiver', () => {
     expect(output()).toContain('Code: 123 456');
   });
 
+  it('prints the e-mail for a user who has no password to reset, with how they sign in', async () => {
+    const { send, output } = await start();
+
+    const res = await send('email.no_password', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google'] });
+
+    expect(res.status).toBe(200);
+    expect(output()).toContain('E-mail to ada@example.com: You have no password to reset (localhost:3000), signs in with: google');
+    expect(output()).toContain('Sign in: http://localhost:3000/');
+  });
+
   it('rejects calls without a valid signature', async () => {
     const { send, output } = await start();
 

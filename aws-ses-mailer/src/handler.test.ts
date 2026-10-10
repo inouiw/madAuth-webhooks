@@ -82,6 +82,26 @@ describe('AWS SES mailer', () => {
     expect(input.Content!.Simple!.Subject?.Data).toBe('You already have an account on app.example.com');
   });
 
+  it('tells a Google user who asked for a reset that there is no password, and how they sign in', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+
+    const input = (send.mock.calls[0][0] as unknown as SendEmailCommand).input;
+    expect(input.Content!.Simple!.Subject?.Data).toBe('You sign in to app.example.com with Google');
+    expect(input.Content!.Simple!.Body!.Text!.Data).toContain('Continue with Google');
+  });
+
+  it('tells a Google-only user who is "already registered" to use Google, not "Forgot password?"', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+
+    const text = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data!;
+    expect(text).toContain('Continue with Google');
+    expect(text).not.toContain('Forgot password?');
+  });
+
   it('answers 400 to a signed call without data and sends nothing', async () => {
     const { handler, send } = setup();
 

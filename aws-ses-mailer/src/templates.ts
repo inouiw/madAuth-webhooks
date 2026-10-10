@@ -54,13 +54,32 @@ export function resetPasswordMail(to: string, site: string, link: string, code: 
   });
 }
 
-export function alreadyRegisteredMail(to: string, site: string, link: string): Mail {
+/** `methods` is how the user signs in, as madAuth sends it (e.g. `["google"]`); it decides what to tell them. */
+export function alreadyRegisteredMail(to: string, site: string, link: string, methods: string[] = []): Mail {
+  const googleOnly = methods.includes('google') && !methods.includes('password');
   return render({
     to,
     subject: `You already have an account on ${site}`,
     intro: `Someone tried to create an account on ${site} with this e-mail address, but you already have one.`,
     action: `Sign in to ${site}`,
     link,
-    outro: 'If you forgot your password, use "Forgot password?" when signing in. If this was not you, ignore this e-mail.',
+    outro: googleOnly
+      ? `Your account signs in with your Google account (${to}): use "Continue with Google". If this was not you, ignore this e-mail.`
+      : 'If you forgot your password, use "Forgot password?" when signing in. If this was not you, ignore this e-mail.',
+  });
+}
+
+/** "Forgot password?" for a user without a password: madAuth sends no reset, the user is told how they sign in. */
+export function noPasswordMail(to: string, site: string, link: string, methods: string[] = []): Mail {
+  const google = methods.includes('google');
+  return render({
+    to,
+    subject: google ? `You sign in to ${site} with Google` : `Your account on ${site} has no password`,
+    intro: google
+      ? `You asked to reset your password on ${site}, but your account has no password: it signs in with your Google account (${to}).`
+      : `You asked to reset your password on ${site}, but your account has no password.`,
+    action: `Sign in to ${site}`,
+    link,
+    outro: `${google ? 'Use "Continue with Google" on the sign-in page. ' : ''}If this was not you, ignore this e-mail.`,
   });
 }
