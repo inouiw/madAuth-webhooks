@@ -3,7 +3,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { verifyWebhook } from '@madauth/server/webhook';
 import type { LambdaFunctionURLEvent, LambdaFunctionURLResult } from 'aws-lambda';
-import { alreadyRegisteredMail, resetPasswordMail, verifyEmailMail, type Mail } from './templates.js';
+import { alreadyRegisteredMail, noPasswordMail, resetPasswordMail, type Mail, verifyEmailMail } from './templates.js';
 
 export interface MailerOptions {
   /** The same WEBHOOK_SECRET madAuth uses. */
@@ -20,6 +20,9 @@ interface Call {
   data: Record<string, any>;
 }
 
+/** How the user signs in, from the call's `methods` (e.g. `["google"]`); empty when the call has none. */
+const methodsOf = (data: Record<string, any>): string[] => (Array.isArray(data.methods) ? data.methods.map(String) : []);
+
 /** The e-mail for a webhook call, or null if the call is not an e-mail. */
 function mailFor({ type, data }: Call): Mail | null {
   switch (type) {
@@ -28,7 +31,9 @@ function mailFor({ type, data }: Call): Mail | null {
     case 'email.reset':
       return resetPasswordMail(data.to, data.site, data.link, data.code);
     case 'email.already_registered':
-      return alreadyRegisteredMail(data.to, data.site, data.link);
+      return alreadyRegisteredMail(data.to, data.site, data.link, methodsOf(data));
+    case 'email.no_password':
+      return noPasswordMail(data.to, data.site, data.link, methodsOf(data));
     default:
       return null;
   }
@@ -51,8 +56,16 @@ export function createMailer(options: MailerOptions) {
     if (!call || typeof call.type !== 'string' || !call.data || typeof call.data !== 'object') return { statusCode: 400 };
 
     const mail = mailFor(call);
-    // Other calls (the sign-up check, events) are not this function's business: an empty 2xx allows them.
-    if (!mail) return { statusCode: 204 };
+    if (!mail) {
+      // An e-mail this version doesn't know: not 2xx, so madAuth doesn't count it as sent but tells the user
+      // that e-mails can't be sent right now, and the server's log says what to update.
+      if (call.type.startsWith('email.')) {
+        console.error(`Unknown e-mail type "${call.type}": update this function, or take the type out of the madAuth server's WEBHOOK_EVENTS.`);
+        return { statusCode: 400 };
+      }
+      // Other calls (the sign-up check, events) are not this function's business: an empty 2xx allows them.
+      return { statusCode: 204 };
+    }
 
     try {
       await options.ses.send(

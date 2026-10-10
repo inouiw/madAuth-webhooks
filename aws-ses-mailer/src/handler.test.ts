@@ -82,6 +82,57 @@ describe('AWS SES mailer', () => {
     expect(input.Content!.Simple!.Subject?.Data).toBe('You already have an account on app.example.com');
   });
 
+  it('tells a Google user who asked for a reset that there is no password, and how they sign in', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+
+    const input = (send.mock.calls[0][0] as unknown as SendEmailCommand).input;
+    expect(input.Content!.Simple!.Subject?.Data).toBe('You sign in to app.example.com with Google');
+    expect(input.Content!.Simple!.Body!.Text!.Data).toContain('Continue with Google');
+  });
+
+  it('tells a Google-only user who is "already registered" to use Google, not "Forgot password?"', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+
+    const text = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data!;
+    expect(text).toContain('Continue with Google');
+    expect(text).not.toContain('Forgot password?');
+  });
+
+  it('points to "Forgot password?" when the user has a password, or when an older madAuth sends no methods', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'password'] }));
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
+
+    for (const call of send.mock.calls) {
+      expect((call[0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data).toContain('Forgot password?');
+    }
+  });
+
+  it('names a sign-in method it does not know, and says only "no password" without any', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
+
+    const [withPasskey, without] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
+    expect(withPasskey.Subject?.Data).toBe('You sign in to app.example.com with passkey');
+    expect(withPasskey.Body!.Text!.Data).toContain('Sign in with passkey on the sign-in page.');
+    expect(without.Subject?.Data).toBe('Your account on app.example.com has no password');
+  });
+
+  it('answers 400 to an e-mail type it does not know, so madAuth does not count it as sent', async () => {
+    const { handler, send } = setup();
+
+    expect(await handler(event('email.magic_link', { to: 'ada@example.com', link: 'https://app.example.com/' }))).toEqual({ statusCode: 400 });
+    expect(send).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('email.magic_link'));
+  });
+
   it('answers 400 to a signed call without data and sends nothing', async () => {
     const { handler, send } = setup();
 

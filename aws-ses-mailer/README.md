@@ -80,10 +80,10 @@ Set these on the madAuth server and restart it:
 ```
 WEBHOOK_URL=https://abc123.lambda-url.eu-central-1.on.aws/
 WEBHOOK_SECRET=<the same secret>
-WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered
+WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered,email.no_password
 ```
 
-`WEBHOOK_EVENTS` lists what this function handles: the three e-mails. madAuth then sends nothing else to it.
+`WEBHOOK_EVENTS` lists what this function handles: the four e-mails. madAuth then sends nothing else to it. An e-mail type this function doesn't know (from a newer madAuth) is answered with an error, so madAuth doesn't count it as sent: update the function, or take the type out of the list.
 
 ## 6. Test
 

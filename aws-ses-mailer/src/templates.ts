@@ -54,13 +54,50 @@ export function resetPasswordMail(to: string, site: string, link: string, code: 
   });
 }
 
-export function alreadyRegisteredMail(to: string, site: string, link: string): Mail {
+/** What to tell a user about one of their sign-in methods, by madAuth's method id. An unknown id is named as it is. */
+function describeMethod(method: string): { name: string; label: string; action: string } {
+  if (method === 'google') return { name: 'Google', label: 'your Google account', action: 'Use "Continue with Google" on the sign-in page.' };
+  return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
+}
+
+/**
+ * How a user without a password signs in, from madAuth's `methods` (e.g. `["google"]`), for the e-mails
+ * that say so. Null if the methods are unknown (an older madAuth) or include a password.
+ */
+function passwordlessHint(methods: string[]): { names: string; labels: string; actions: string } | null {
+  if (!methods.length || methods.includes('password')) return null;
+  const described = methods.map(describeMethod);
+  return {
+    names: described.map((d) => d.name).join(' or '),
+    labels: described.map((d) => d.label).join(' or '),
+    actions: described.map((d) => d.action).join(' '),
+  };
+}
+
+/** `methods` is how the user signs in, as madAuth sends it (e.g. `["google"]`); a user without a password is sent there. */
+export function alreadyRegisteredMail(to: string, site: string, link: string, methods: string[] = []): Mail {
+  const hint = passwordlessHint(methods);
   return render({
     to,
     subject: `You already have an account on ${site}`,
     intro: `Someone tried to create an account on ${site} with this e-mail address, but you already have one.`,
     action: `Sign in to ${site}`,
     link,
-    outro: 'If you forgot your password, use "Forgot password?" when signing in. If this was not you, ignore this e-mail.',
+    outro: hint
+      ? `Your account has no password: it signs in with ${hint.labels}. ${hint.actions} If this was not you, ignore this e-mail.`
+      : 'If you forgot your password, use "Forgot password?" when signing in. If this was not you, ignore this e-mail.',
+  });
+}
+
+/** "Forgot password?" for a user without a password: madAuth sends no reset, the user is told how they sign in. */
+export function noPasswordMail(to: string, site: string, link: string, methods: string[] = []): Mail {
+  const hint = passwordlessHint(methods);
+  return render({
+    to,
+    subject: hint ? `You sign in to ${site} with ${hint.names}` : `Your account on ${site} has no password`,
+    intro: `You asked to reset your password on ${site}, but your account has no password${hint ? `: it signs in with ${hint.labels}.` : '.'}`,
+    action: `Sign in to ${site}`,
+    link,
+    outro: `${hint ? `${hint.actions} ` : ''}If this was not you, ignore this e-mail.`,
   });
 }
