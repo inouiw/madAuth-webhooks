@@ -56,8 +56,16 @@ export function createMailer(options: MailerOptions) {
     if (!call || typeof call.type !== 'string' || !call.data || typeof call.data !== 'object') return { statusCode: 400 };
 
     const mail = mailFor(call);
-    // Other calls (the sign-up check, events) are not this function's business: an empty 2xx allows them.
-    if (!mail) return { statusCode: 204 };
+    if (!mail) {
+      // An e-mail this version doesn't know: not 2xx, so madAuth doesn't count it as sent but tells the user
+      // that e-mails can't be sent right now, and the server's log says what to update.
+      if (call.type.startsWith('email.')) {
+        console.error(`Unknown e-mail type "${call.type}": update this function, or take the type out of the madAuth server's WEBHOOK_EVENTS.`);
+        return { statusCode: 400 };
+      }
+      // Other calls (the sign-up check, events) are not this function's business: an empty 2xx allows them.
+      return { statusCode: 204 };
+    }
 
     try {
       await options.ses.send(
