@@ -80,12 +80,11 @@ export function createReceiver(options: ReceiverOptions) {
     if (type === 'signup.before') {
       const domain = String(data.email).split('@').pop()!.toLowerCase();
       const allowed = !options.allowedDomains?.length || options.allowedDomains.includes(domain);
-      log(`[webhook] Sign-up check for ${data.email}: ${allowed ? 'allowed' : 'refused'}`);
+      log(`[webhook] Sign-up check for ${data.email} (${data.method ?? 'password'}): ${allowed ? 'allowed' : 'refused'}`);
       return reply(200, allowed ? { allow: true } : { allow: false, message: `Only addresses at ${options.allowedDomains!.join(', ')} can sign up.` });
     }
-    if (type === 'roles.changed') {
-      const roles = Array.isArray(data.roles) && data.roles.length ? data.roles.join(', ') : 'none';
-      log(`[webhook] roles.changed: ${data.email} now has ${roles} (set by ${data.by})`);
+    if (type === 'user.claims_changed') {
+      log(`[webhook] user.claims_changed: ${data.email} now has ${JSON.stringify(data.claims ?? {})} (set by ${data.by})`);
       return reply(204);
     }
     const detail = data.method ?? data.via ?? '';

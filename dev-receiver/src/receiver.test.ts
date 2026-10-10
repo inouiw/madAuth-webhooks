@@ -67,14 +67,15 @@ describe('dev webhook receiver', () => {
     expect(output()).toContain('user.signed_in: ada@example.com (password)');
   });
 
-  it('prints role changes with the address, the roles and who set them', async () => {
+  it('prints claim changes with the address, the claims and who set them', async () => {
     const { send, output } = await start();
+    const data = { userId: 'usr_1', email: 'ada@example.com', by: 'grace@example.com' };
 
-    expect((await send('roles.changed', { email: 'ada@example.com', roles: ['admin', 'editor'], by: 'grace@example.com' })).status).toBe(204);
-    expect((await send('roles.changed', { email: 'ada@example.com', roles: [], by: 'grace@example.com' })).status).toBe(204);
+    expect((await send('user.claims_changed', { ...data, claims: { roles: ['admin', 'editor'] } })).status).toBe(204);
+    expect((await send('user.claims_changed', { ...data, claims: {} })).status).toBe(204);
 
-    expect(output()).toContain('roles.changed: ada@example.com now has admin, editor (set by grace@example.com)');
-    expect(output()).toContain('roles.changed: ada@example.com now has none (set by grace@example.com)');
+    expect(output()).toContain('user.claims_changed: ada@example.com now has {"roles":["admin","editor"]} (set by grace@example.com)');
+    expect(output()).toContain('user.claims_changed: ada@example.com now has {} (set by grace@example.com)');
   });
 
   it('answers 400 to a signed call without data, and keeps running', async () => {
