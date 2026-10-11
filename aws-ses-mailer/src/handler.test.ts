@@ -45,7 +45,7 @@ describe('AWS SES mailer', () => {
   it('sends the reset e-mail with link and code, and answers 200', async () => {
     const { handler, send } = setup();
 
-    expect(await handler(event('email.reset', reset, { base64: true }))).toEqual({ statusCode: 200 });
+    expect(await handler(event('email.send_password_reset', reset, { base64: true }))).toEqual({ statusCode: 200 });
 
     expect(send).toHaveBeenCalledOnce();
     const command = send.mock.calls[0][0] as unknown as SendEmailCommand;
@@ -61,33 +61,59 @@ describe('AWS SES mailer', () => {
     }
   });
 
+  it('sends the e-mails and SMS of a madAuth server from before 0.5 under their old names', async () => {
+    const { handler, send, publish } = setup(undefined, {});
+    const account = { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] };
+
+    for (const [type, data] of [
+      ['email.verify', reset],
+      ['email.reset', reset],
+      ['email.signin', { ...reset, link: 'https://app.example.com/#madauth_signin=T' }],
+      ['email.already_registered', account],
+      ['email.no_password', account],
+      ['sms.code', sms],
+    ] as const) {
+      expect(await handler(event(type, data))).toEqual({ statusCode: 200 });
+    }
+
+    const subjects = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!.Subject?.Data);
+    expect(subjects).toEqual([
+      'Confirm your e-mail address for app.example.com',
+      'Reset your password for app.example.com',
+      'Sign in to app.example.com',
+      'You already have an account on app.example.com',
+      'You sign in to app.example.com with Google',
+    ]);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it('answers 502 when SES does not accept the e-mail, so madAuth reports it', async () => {
     const { handler } = setup(async () => {
       throw new Error('MessageRejected: Email address is not verified.');
     });
 
-    expect(await handler(event('email.verify', reset))).toEqual({ statusCode: 502 });
+    expect(await handler(event('email.send_verification', reset))).toEqual({ statusCode: 502 });
   });
 
   it('rejects a call with a wrong signature and sends nothing', async () => {
     const { handler, send } = setup();
 
-    expect(await handler(event('email.reset', reset, { sign: false }))).toEqual({ statusCode: 401 });
+    expect(await handler(event('email.send_password_reset', reset, { sign: false }))).toEqual({ statusCode: 401 });
     expect(send).not.toHaveBeenCalled();
   });
 
   it('allows the sign-up check and accepts events without sending', async () => {
     const { handler, send } = setup();
 
-    expect(await handler(event('signup.before', { email: 'ada@example.com' }))).toEqual({ statusCode: 204 });
-    expect(await handler(event('user.created', { user: { id: 'usr_1' } }))).toEqual({ statusCode: 204 });
+    expect(await handler(event('user.signing_up', { email: 'ada@example.com' }))).toEqual({ statusCode: 204 });
+    expect(await handler(event('user.signed_up', { user: { id: 'usr_1' } }))).toEqual({ statusCode: 204 });
     expect(send).not.toHaveBeenCalled();
   });
 
   it('sends the "already registered" e-mail', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
 
     const input = (send.mock.calls[0][0] as unknown as SendEmailCommand).input;
     expect(input.Content!.Simple!.Subject?.Data).toBe('You already have an account on app.example.com');
@@ -96,7 +122,7 @@ describe('AWS SES mailer', () => {
   it('tells a Google user who asked for a reset that there is no password, and how they sign in', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
 
     const input = (send.mock.calls[0][0] as unknown as SendEmailCommand).input;
     expect(input.Content!.Simple!.Subject?.Data).toBe('You sign in to app.example.com with Google');
@@ -106,7 +132,7 @@ describe('AWS SES mailer', () => {
   it('tells a Google-only user who is "already registered" to use Google, not "Forgot password?"', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google'] }));
 
     const text = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data!;
     expect(text).toContain('Continue with Google');
@@ -116,8 +142,8 @@ describe('AWS SES mailer', () => {
   it('points to "Forgot password?" when the user has a password, or when an older madAuth sends no methods', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'password'] }));
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'password'] }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
 
     for (const call of send.mock.calls) {
       expect((call[0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data).toContain('Forgot password?');
@@ -127,8 +153,8 @@ describe('AWS SES mailer', () => {
   it('names a sign-in method it does not know, and says only "no password" without any', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
 
     const [withPasskey, without] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
     expect(withPasskey.Subject?.Data).toBe('You sign in to app.example.com with passkey');
@@ -139,7 +165,7 @@ describe('AWS SES mailer', () => {
   it('sends the sign-in e-mail of the e-mail link with its link and code', async () => {
     const { handler, send } = setup();
 
-    expect(await handler(event('email.signin', { ...reset, link: 'https://app.example.com/#madauth_signin=T', code: '989624' }))).toEqual({ statusCode: 200 });
+    expect(await handler(event('email.send_signin_link', { ...reset, link: 'https://app.example.com/#madauth_signin=T', code: '989624' }))).toEqual({ statusCode: 200 });
 
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('Sign in to app.example.com');
@@ -153,8 +179,8 @@ describe('AWS SES mailer', () => {
   it('names the e-mail link and the authenticator app among the ways a user signs in', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link'] }));
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp'] }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp'] }));
 
     const [registered, noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
     expect(registered.Body!.Text!.Data).toContain('a link sent to this address');
@@ -166,8 +192,8 @@ describe('AWS SES mailer', () => {
   it('sends an SMS code with SNS as a transactional message, and answers 200', async () => {
     const { handler, send, publish } = setup(undefined, { senderId: 'Example' });
 
-    expect(await handler(event('sms.code', sms))).toEqual({ statusCode: 200 });
-    expect(await handler(event('sms.code', { ...sms, code: '258898', purpose: 'setup' }))).toEqual({ statusCode: 200 });
+    expect(await handler(event('sms.send_code', sms))).toEqual({ statusCode: 200 });
+    expect(await handler(event('sms.send_code', { ...sms, code: '258898', purpose: 'setup' }))).toEqual({ statusCode: 200 });
 
     expect(send).not.toHaveBeenCalled();
     const [signIn, setUp] = publish.mock.calls.map((call) => (call[0] as unknown as PublishCommand).input);
@@ -181,7 +207,7 @@ describe('AWS SES mailer', () => {
     expect(setUp.Message).toBe('258 898 is your code to confirm your phone number for app.example.com. It is valid for 10 minutes.');
     // Without a sender id, none is sent.
     const plain = setup(undefined, {});
-    await plain.handler(event('sms.code', { ...sms, purpose: 'approve' }));
+    await plain.handler(event('sms.send_code', { ...sms, purpose: 'approve' }));
     const input = (plain.publish.mock.calls[0][0] as unknown as PublishCommand).input;
     expect(input.Message).toContain('to change your phone number');
     expect(Object.keys(input.MessageAttributes!)).toEqual(['AWS.SNS.SMS.SMSType']);
@@ -193,10 +219,10 @@ describe('AWS SES mailer', () => {
         throw new Error('InvalidParameter: phone number');
       },
     });
-    expect(await refused.handler(event('sms.code', sms))).toEqual({ statusCode: 502 });
+    expect(await refused.handler(event('sms.send_code', sms))).toEqual({ statusCode: 502 });
 
     const { handler, publish } = setup();
-    expect(await handler(event('sms.code', sms))).toEqual({ statusCode: 400 });
+    expect(await handler(event('sms.send_code', sms))).toEqual({ statusCode: 400 });
     expect(publish).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('SendSms=true'));
   });
@@ -204,16 +230,16 @@ describe('AWS SES mailer', () => {
   it('answers 400 to an SMS without a number or a code, so no empty SMS goes out and madAuth does not count it as sent', async () => {
     const { handler, publish } = setup(undefined, {});
 
-    expect(await handler(event('sms.code', { ...sms, code: undefined }))).toEqual({ statusCode: 400 });
-    expect(await handler(event('sms.code', { ...sms, to: '' }))).toEqual({ statusCode: 400 });
+    expect(await handler(event('sms.send_code', { ...sms, code: undefined }))).toEqual({ statusCode: 400 });
+    expect(await handler(event('sms.send_code', { ...sms, to: '' }))).toEqual({ statusCode: 400 });
     expect(publish).not.toHaveBeenCalled();
   });
 
   it('accepts the e-mail and SMS events without sending anything', async () => {
     const { handler, send, publish } = setup(undefined, {});
 
-    // Events carry `user`, not `to`: also ones this version has not heard of.
-    for (const type of ['email.verified', 'email.password_reset', 'sms.enabled', 'sms.disabled', 'sms.replaced']) {
+    // Events carry `user`, not `to`: also ones this version has not heard of, and the names madAuth used before 0.5.
+    for (const type of ['user.email_verified', 'user.password_reset', 'user.second_factor_enabled', 'user.second_factor_disabled', 'user.signed_up', 'email.verified', 'sms.enabled', 'sms.replaced']) {
       expect(await handler(event(type, { user: { id: 'usr_1' }, phone: '+41791234567' }))).toEqual({ statusCode: 204 });
     }
     expect(send).not.toHaveBeenCalled();
@@ -233,14 +259,14 @@ describe('AWS SES mailer', () => {
   it('answers 400 to a signed call without data and sends nothing', async () => {
     const { handler, send } = setup();
 
-    expect(await handler(event('email.verify', undefined))).toEqual({ statusCode: 400 });
+    expect(await handler(event('email.send_verification', undefined))).toEqual({ statusCode: 400 });
     expect(send).not.toHaveBeenCalled();
   });
 
   it('tells a GitHub-only user who asked for a reset that there is no password, and to continue with GitHub', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
 
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('You sign in to app.example.com with GitHub');
@@ -251,7 +277,7 @@ describe('AWS SES mailer', () => {
   it('tells a GitHub-only user who is "already registered" to use GitHub, not "Forgot password?"', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
 
     const text = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data!;
     expect(text).toContain('Continue with GitHub');
@@ -261,7 +287,7 @@ describe('AWS SES mailer', () => {
   it('names both Google and GitHub for a user who signs in with either', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'github'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'github'] }));
 
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('You sign in to app.example.com with Google or GitHub');
@@ -273,7 +299,7 @@ describe('AWS SES mailer', () => {
   it('keeps the order of the methods when a button method comes after one with its own action, and names a repeated method once', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link', 'github', 'github', 'passkey'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link', 'github', 'github', 'passkey'] }));
 
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or passkey');

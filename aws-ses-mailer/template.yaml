@@ -21,7 +21,7 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
-    Description: Send madAuth's SMS codes (sms.code) with Amazon SNS. Needs SNS SMS set up in the region (see the README).
+    Description: Send madAuth's SMS codes (sms.send_code) with Amazon SNS. Needs SNS SMS set up in the region (see the README).
   SmsSenderId:
     Type: String
     Default: ''

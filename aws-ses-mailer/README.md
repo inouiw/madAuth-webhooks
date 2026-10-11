@@ -82,29 +82,31 @@ Set these on the madAuth server and restart it:
 ```
 WEBHOOK_URL=https://abc123.lambda-url.eu-central-1.on.aws/
 WEBHOOK_SECRET=<the same secret>
-WEBHOOK_EVENTS=email.verify,email.reset,email.signin,email.already_registered,email.no_password
+WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_signin_link,email.send_already_registered,email.send_password_reset_no_password
 ```
 
-`WEBHOOK_EVENTS` lists what this function handles: the five e-mails (`email.signin` is the passwordless e-mail link of madAuth 0.5; leave it out to keep that method off). With `SendSms=true`, add `sms.code` for the SMS codes. madAuth then sends nothing else to it. An e-mail or SMS type this function doesn't know (from a newer madAuth) is answered with an error, so madAuth doesn't count it as sent: update the function, or take the type out of the list.
+`WEBHOOK_EVENTS` lists what this function handles: the five e-mails (`email.send_signin_link` is the passwordless e-mail link of madAuth 0.5; leave it out to keep that method off). With `SendSms=true`, add `sms.send_code` for the SMS codes. madAuth then sends nothing else to it. An e-mail or SMS type this function doesn't know (from a newer madAuth) is answered with an error, so madAuth doesn't count it as sent: update the function, or take the type out of the list.
+
+**Upgrading madAuth to 0.5:** these are its names. A server from before sends `email.verify`, `email.reset`, `email.signin`, `email.already_registered`, `email.no_password` and `sms.code`, and this function sends those as well. So deploy this version first, then upgrade the server and rename its `WEBHOOK_EVENTS` (a 0.5 server with an old name in it refuses to start and says the new one).
 
 ## 6. Test
 
 Sign up in your app with an address you can read (in the sandbox, a verified one). The confirmation e-mail should arrive within seconds.
 
 If it doesn't, check these in order:
-- **The madAuth server's log:** `[madauth] Webhook "email.verify" … failed: HTTP 401` means the two secrets differ. `HTTP 502` means SES refused the e-mail.
+- **The madAuth server's log:** `[madauth] Webhook "email.send_verification" … failed: HTTP 401` means the two secrets differ. `HTTP 502` means SES refused the e-mail.
 - **The function's log** in CloudWatch (Lambda console → the function → **Monitor** → **View CloudWatch logs**), which contains SES's reason, e.g. `MessageRejected: Email address is not verified` while in the sandbox.
 - **`AccessDenied` for a resource `identity/<the recipient's address>`** in the function's log: in the sandbox, SES also checks the policy against the recipient's verified identity, and the function may only use your sending domain. It goes away with production access (step 2).
 - **Your spam folder.** If the e-mail lands there, check that DKIM and DMARC are set up (step 1).
 
 ## SMS codes
 
-madAuth 0.5 can ask for a code sent to the user's phone as a second factor (`sms.code` in the madAuth docs). With `SendSms=true`, this function sends those codes with Amazon SNS as transactional SMS, and the SAM template gives it `sns:Publish`. Before that works:
+madAuth 0.5 can ask for a code sent to the user's phone as a second factor (`sms.send_code` in the madAuth docs). With `SendSms=true`, this function sends those codes with Amazon SNS as transactional SMS, and the SAM template gives it `sns:Publish`. Before that works:
 
 1. **Leave the SMS sandbox.** New accounts can only send to phone numbers you verified in the [SNS console](https://console.aws.amazon.com/sns/) → **Text messaging (SMS)** → **Sandbox destination phone numbers**; that is enough for a test with your own phone. For real users, request production access on that page.
 2. **Raise the spending limit.** SNS stops sending at $1.00 per month by default. Set a higher **Account spend limit** under **Text messaging (SMS)** → **Text messaging preferences** (an AWS support request).
 3. **Check your countries.** Some countries require a registered sender (e.g. a 10DLC or toll-free number in the US, a registered sender ID in India): see [SNS SMS country support](https://docs.aws.amazon.com/sns/latest/dg/sns-supported-regions-countries.html). Where an alphabetic sender ID is shown, `SmsSenderId` sets it.
-4. Deploy again with `sam deploy` and the two parameters, and add `sms.code` to the madAuth server's `WEBHOOK_EVENTS`.
+4. Deploy again with `sam deploy` and the two parameters, and add `sms.send_code` to the madAuth server's `WEBHOOK_EVENTS`.
 
 Without `SendSms=true`, an SMS code is answered with an error, so madAuth tells the user that the SMS can't be sent, and the function's log says why. The SMS text is `smsText` in [`src/templates.ts`](src/templates.ts): one segment, with the code and what it is for.
 

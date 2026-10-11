@@ -15,7 +15,7 @@ export interface MailerOptions {
   /** Optional SES configuration set, e.g. to record bounces and complaints. */
   configurationSet?: string;
   ses: Pick<SESv2Client, 'send'>;
-  /** Sends the SMS codes (`sms.code`). Without it, an SMS is answered with an error, so madAuth reports it. */
+  /** Sends the SMS codes (`sms.send_code`). Without it, an SMS is answered with an error, so madAuth reports it. */
   sns?: Pick<SNSClient, 'send'>;
   /** Optional sender name shown instead of a number, where carriers support it (SNS `AWS.SNS.SMS.SenderID`). */
   smsSenderId?: string;
@@ -26,27 +26,40 @@ interface Call {
   data: Record<string, any>;
 }
 
+/**
+ * The names madAuth used before 0.5, and their names now. Both work, so this function can be deployed before
+ * a madAuth server is upgraded, and still sends the e-mails of one that isn't yet.
+ */
+const LEGACY_TYPES: Record<string, string> = {
+  'email.verify': 'email.send_verification',
+  'email.reset': 'email.send_password_reset',
+  'email.signin': 'email.send_signin_link',
+  'email.already_registered': 'email.send_already_registered',
+  'email.no_password': 'email.send_password_reset_no_password',
+  'sms.code': 'sms.send_code',
+};
+
 /** How the user signs in, from the call's `methods` (e.g. `["google"]`); empty when the call has none. */
 const methodsOf = (data: Record<string, any>): string[] => (Array.isArray(data.methods) ? data.methods.map(String) : []);
 
 /**
- * Whether a call is a message to send (an e-mail or an SMS, which carry `to`) rather than an event of the same family
- * (`email.verified`, `sms.enabled`, …, which carry `user`): only a message this function can't send is an error.
+ * Whether a call is a message to send (an e-mail or an SMS, which carry `to`) rather than an event (madAuth before
+ * 0.5 named some `email.verified`, `sms.enabled`, …; they carry `user`): only a message this function can't send is an error.
  */
 const isMessage = ({ type, data }: Call): boolean => (type.startsWith('email.') || type.startsWith('sms.')) && typeof data.to === 'string';
 
 /** The e-mail for a webhook call, or null if the call is not an e-mail. */
 function mailFor({ type, data }: Call): Mail | null {
   switch (type) {
-    case 'email.verify':
+    case 'email.send_verification':
       return verifyEmailMail(data.to, data.site, data.link, data.code);
-    case 'email.reset':
+    case 'email.send_password_reset':
       return resetPasswordMail(data.to, data.site, data.link, data.code);
-    case 'email.signin':
+    case 'email.send_signin_link':
       return signInMail(data.to, data.site, data.link, data.code);
-    case 'email.already_registered':
+    case 'email.send_already_registered':
       return alreadyRegisteredMail(data.to, data.site, data.link, methodsOf(data));
-    case 'email.no_password':
+    case 'email.send_password_reset_no_password':
       return noPasswordMail(data.to, data.site, data.link, methodsOf(data));
     default:
       return null;
@@ -68,8 +81,9 @@ export function createMailer(options: MailerOptions) {
       return { statusCode: 400 };
     }
     if (!call || typeof call.type !== 'string' || !call.data || typeof call.data !== 'object') return { statusCode: 400 };
+    call = { ...call, type: LEGACY_TYPES[call.type] ?? call.type };
 
-    if (call.type === 'sms.code') return sendSms(options, call.data);
+    if (call.type === 'sms.send_code') return sendSms(options, call.data);
 
     const mail = mailFor(call);
     if (!mail) {
@@ -109,7 +123,7 @@ export function createMailer(options: MailerOptions) {
 /** Hands an SMS code to SNS as a transactional message; 200 once SNS accepted it. */
 async function sendSms(options: MailerOptions, data: Record<string, any>): Promise<LambdaFunctionURLResult> {
   if (!options.sns) {
-    console.error('An SMS code arrived, but SMS sending is not set up: deploy with SendSms=true, or take sms.code out of the madAuth server\'s WEBHOOK_EVENTS.');
+    console.error('An SMS code arrived, but SMS sending is not set up: deploy with SendSms=true, or take sms.send_code (sms.code before madAuth 0.5) out of the madAuth server\'s WEBHOOK_EVENTS.');
     return { statusCode: 400 };
   }
   const to = String(data.to ?? '');
