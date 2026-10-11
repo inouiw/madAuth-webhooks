@@ -269,4 +269,16 @@ describe('AWS SES mailer', () => {
     expect(content.Body!.Text!.Data).toContain('Use "Continue with Google" or "Continue with GitHub" on the sign-in page.');
     expect(content.Body!.Html!.Data).toContain('your Google account or your GitHub account');
   });
+
+  it('keeps the order of the methods when a button method comes after one with its own action, and names a repeated method once', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link', 'github', 'github', 'passkey'] }));
+
+    const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
+    expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or passkey');
+    expect(content.Body!.Text!.Data).toContain(
+      'Choose "E-mail link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with passkey on the sign-in page.',
+    );
+  });
 });
