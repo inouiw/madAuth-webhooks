@@ -43,6 +43,31 @@ describe('dev webhook receiver', () => {
     expect(output()).toContain('Code: 123 456');
   });
 
+  it('prints the sign-in e-mail of the e-mail link with its link and code', async () => {
+    const { send, output } = await start();
+
+    const res = await send('email.signin', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_signin=T', code: '989624', site: 'localhost:3000' });
+
+    expect(res.status).toBe(200);
+    expect(output()).toContain('E-mail to ada@example.com: Sign in (localhost:3000)');
+    expect(output()).toContain('Link: http://localhost:3000/#madauth_signin=T');
+    expect(output()).toContain('Code: 989 624');
+  });
+
+  it('prints an SMS code with its number and what it is for', async () => {
+    const { send, output } = await start();
+
+    expect((await send('sms.code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' })).status).toBe(200);
+    expect((await send('sms.code', { to: '+41791234567', code: '355069', purpose: 'signin', site: 'localhost' })).status).toBe(200);
+    expect((await send('sms.code', { to: '+41791234567', code: '000111', purpose: 'approve', site: 'localhost' })).status).toBe(200);
+
+    expect(output()).toContain('SMS to +41791234567: Confirm your phone number (localhost)');
+    expect(output()).toContain('Code: 258 898');
+    expect(output()).toContain('SMS to +41791234567: Sign in (localhost)');
+    expect(output()).toContain('Code: 355 069');
+    expect(output()).toContain('SMS to +41791234567: Change your phone number (localhost)');
+  });
+
   it('prints the e-mail for a user who has no password to reset, with how they sign in', async () => {
     const { send, output } = await start();
 
@@ -84,6 +109,10 @@ describe('dev webhook receiver', () => {
 
     expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'password' })).status).toBe(204);
     expect(output()).toContain('user.signed_in: ada@example.com (password)');
+    expect((await send('sms.enabled', { user: { id: 'usr_1', email: 'ada@example.com' }, phone: '+41791234567' })).status).toBe(204);
+    expect(output()).toContain('sms.enabled: ada@example.com (phone: +41791234567)');
+    expect((await send('totp.recovery_code_used', { user: { id: 'usr_1', email: 'ada@example.com' }, remaining: 9 })).status).toBe(204);
+    expect(output()).toContain('totp.recovery_code_used: ada@example.com (remaining: 9)');
   });
 
   it('prints claim changes with the address, the claims and who set them', async () => {
