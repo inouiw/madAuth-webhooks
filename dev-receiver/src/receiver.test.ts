@@ -109,6 +109,10 @@ describe('dev webhook receiver', () => {
 
     expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'password' })).status).toBe(204);
     expect(output()).toContain('user.signed_in: ada@example.com (password)');
+    expect((await send('sms.enabled', { user: { id: 'usr_1', email: 'ada@example.com' }, phone: '+41791234567' })).status).toBe(204);
+    expect(output()).toContain('sms.enabled: ada@example.com (phone: +41791234567)');
+    expect((await send('totp.recovery_code_used', { user: { id: 'usr_1', email: 'ada@example.com' }, remaining: 9 })).status).toBe(204);
+    expect(output()).toContain('totp.recovery_code_used: ada@example.com (remaining: 9)');
   });
 
   it('prints claim changes with the address, the claims and who set them', async () => {

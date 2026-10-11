@@ -29,8 +29,11 @@ interface Call {
 /** How the user signs in, from the call's `methods` (e.g. `["google"]`); empty when the call has none. */
 const methodsOf = (data: Record<string, any>): string[] => (Array.isArray(data.methods) ? data.methods.map(String) : []);
 
-/** The calls of the `email.*` and `sms.*` families that are events, not messages to send: an empty 2xx is the right answer. */
-const EVENTS = ['email.verified', 'email.password_reset', 'sms.enabled', 'sms.disabled'];
+/**
+ * Whether a call is a message to send (an e-mail or an SMS, which carry `to`) rather than an event of the same family
+ * (`email.verified`, `sms.enabled`, …, which carry `user`): only a message this function can't send is an error.
+ */
+const isMessage = ({ type, data }: Call): boolean => (type.startsWith('email.') || type.startsWith('sms.')) && typeof data.to === 'string';
 
 /** The e-mail for a webhook call, or null if the call is not an e-mail. */
 function mailFor({ type, data }: Call): Mail | null {
@@ -72,7 +75,7 @@ export function createMailer(options: MailerOptions) {
     if (!mail) {
       // An e-mail or SMS this version doesn't know: not 2xx, so madAuth doesn't count it as sent but tells the
       // user that it can't be sent right now, and the server's log says what to update.
-      if ((call.type.startsWith('email.') || call.type.startsWith('sms.')) && !EVENTS.includes(call.type)) {
+      if (isMessage(call)) {
         console.error(`Unknown e-mail or SMS type "${call.type}": update this function, or take the type out of the madAuth server's WEBHOOK_EVENTS.`);
         return { statusCode: 400 };
       }
@@ -110,11 +113,17 @@ async function sendSms(options: MailerOptions, data: Record<string, any>): Promi
     return { statusCode: 400 };
   }
   const to = String(data.to ?? '');
+  const code = String(data.code ?? '');
+  if (!to || !code) {
+    // Not 2xx: an SMS without a number or a code must not count as sent (and SNS would send an empty code).
+    console.error(`An SMS code arrived without ${to ? 'a code' : 'a number'}: is the madAuth server newer than this function?`);
+    return { statusCode: 400 };
+  }
   try {
     await options.sns.send(
       new PublishCommand({
         PhoneNumber: to,
-        Message: smsText(String(data.site ?? ''), String(data.code ?? ''), data.purpose),
+        Message: smsText(String(data.site ?? ''), code, data.purpose),
         MessageAttributes: {
           // A one-time code must arrive now, not be held back by a spending cap on promotional messages.
           'AWS.SNS.SMS.SMSType': { DataType: 'String', StringValue: 'Transactional' },

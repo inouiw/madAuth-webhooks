@@ -25,6 +25,8 @@ Parameters:
   SmsSenderId:
     Type: String
     Default: ''
+    AllowedPattern: '^([A-Za-z0-9]{3,11})?$'
+    ConstraintDescription: 3 to 11 letters and digits, or empty.
     Description: Optional sender name for the SMS, 3 to 11 letters and digits, where carriers show one (not in every country).
 
 Conditions:
@@ -61,15 +63,20 @@ Resources:
                   - HasConfigurationSet
                   - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSet}
                   - !Ref AWS::NoValue
-            # Publishing to a phone number has no resource ARN: SNS needs "*".
+            # Publishing to a phone number has no resource ARN, so SNS needs "*", and no condition key tells an SMS
+            # from a topic (sns:Protocol only exists for Subscribe). The Deny keeps the function from publishing to
+            # the account's topics: a phone-number Publish has no topic resource and is not matched by it.
             - !If
               - SendsSms
               - Effect: Allow
                 Action: sns:Publish
                 Resource: '*'
-                Condition:
-                  'ForAllValues:StringLike':
-                    sns:Protocol: ['sms']
+              - !Ref AWS::NoValue
+            - !If
+              - SendsSms
+              - Effect: Deny
+                Action: sns:Publish
+                Resource: !Sub arn:${AWS::Partition}:sns:*:*:*
               - !Ref AWS::NoValue
     Metadata:
       BuildMethod: esbuild

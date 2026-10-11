@@ -201,11 +201,20 @@ describe('AWS SES mailer', () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('SendSms=true'));
   });
 
+  it('answers 400 to an SMS without a number or a code, so no empty SMS goes out and madAuth does not count it as sent', async () => {
+    const { handler, publish } = setup(undefined, {});
+
+    expect(await handler(event('sms.code', { ...sms, code: undefined }))).toEqual({ statusCode: 400 });
+    expect(await handler(event('sms.code', { ...sms, to: '' }))).toEqual({ statusCode: 400 });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it('accepts the e-mail and SMS events without sending anything', async () => {
     const { handler, send, publish } = setup(undefined, {});
 
-    for (const type of ['email.verified', 'email.password_reset', 'sms.enabled', 'sms.disabled']) {
-      expect(await handler(event(type, { user: { id: 'usr_1' } }))).toEqual({ statusCode: 204 });
+    // Events carry `user`, not `to`: also ones this version has not heard of.
+    for (const type of ['email.verified', 'email.password_reset', 'sms.enabled', 'sms.disabled', 'sms.replaced']) {
+      expect(await handler(event(type, { user: { id: 'usr_1' }, phone: '+41791234567' }))).toEqual({ statusCode: 204 });
     }
     expect(send).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();

@@ -10,8 +10,11 @@ export interface Mail {
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
+/** A 6-digit code as it is shown: `513 416`. */
+const spaceCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
+
 function render(opts: { to: string; subject: string; intro: string; link: string; action: string; code?: string; outro: string }): Mail {
-  const spacedCode = opts.code ? `${opts.code.slice(0, 3)} ${opts.code.slice(3)}` : undefined;
+  const spacedCode = opts.code ? spaceCode(opts.code) : undefined;
   const text = [
     opts.intro,
     '',
@@ -104,14 +107,13 @@ export function alreadyRegisteredMail(to: string, site: string, link: string, me
   });
 }
 
-/** What an SMS code is for, as madAuth sends it: confirming a new number, the second step of a sign-in, or approving a change to the number. */
-export type SmsPurpose = 'setup' | 'signin' | 'approve';
-
-/** The SMS with a code, short enough for one message segment. `purpose` says what it is for. */
-export function smsText(site: string, code: string, purpose: SmsPurpose | string | undefined): string {
-  const spacedCode = `${code.slice(0, 3)} ${code.slice(3)}`;
+/**
+ * The SMS with a code, short enough for one message segment. `purpose` is what the code is for, as madAuth sends it:
+ * `setup` (confirming a new number), `signin` (the second step of a sign-in) or `approve` (a change to the number).
+ */
+export function smsText(site: string, code: string, purpose: string | undefined): string {
   const what = purpose === 'setup' ? 'to confirm your phone number' : purpose === 'approve' ? 'to change your phone number' : 'to sign in';
-  return `${spacedCode} is your code ${what} for ${site}. It is valid for 10 minutes.`;
+  return `${spaceCode(code)} is your code ${what} for ${site}. It is valid for 10 minutes.`;
 }
 
 /** "Forgot password?" for a user without a password: madAuth sends no reset, the user is told how they sign in. */

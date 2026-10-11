@@ -98,8 +98,11 @@ export function createReceiver(options: ReceiverOptions) {
       log(`[webhook] user.claims_changed: ${data.email} now has ${JSON.stringify(data.claims ?? {})} (set by ${data.by})`);
       return reply(204);
     }
-    const detail = data.method ?? data.via ?? '';
-    log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${detail ? ` (${detail})` : ''}`);
+    // What else the event says: how they signed in (`password`), and the other fields as `phone: +41…`, `by: admin@…`.
+    const details = Object.entries(data)
+      .filter(([key, value]) => key !== 'user' && value != null && typeof value !== 'object')
+      .map(([key, value]) => (key === 'method' || key === 'via' ? String(value) : `${key}: ${value}`));
+    log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${details.length ? ` (${details.join(', ')})` : ''}`);
     return reply(204);
   };
 }
