@@ -1,14 +1,14 @@
-# Sending madAuth's e-mails with Amazon SES
+# Sending madAuth's e-mails with Amazon SES (and its SMS with Amazon SNS)
 
-A madAuth [webhook](https://github.com/inouiw/madAuth/blob/main/docs/server.md#webhooks) receiver on AWS Lambda that sends the confirmation and password-reset e-mails with [Amazon SES](https://aws.amazon.com/ses/). It:
+A madAuth [webhook](https://github.com/inouiw/madAuth/blob/main/docs/server.md#webhooks) receiver on AWS Lambda that sends the confirmation, password-reset and sign-in e-mails with [Amazon SES](https://aws.amazon.com/ses/), and, if you turn it on, the SMS codes with [Amazon SNS](https://aws.amazon.com/sns/). It:
 
 - checks that each call is signed with your `WEBHOOK_SECRET`
-- renders the e-mail ([`src/templates.ts`](src/templates.ts)) with the link and the 6-digit code
-- answers `200` only after SES has accepted the e-mail. Otherwise it answers `502`, and madAuth tells the user that e-mails can't be sent right now.
+- renders the e-mail or the SMS ([`src/templates.ts`](src/templates.ts)) with the link and the 6-digit code
+- answers `200` only after SES or SNS has accepted the message. Otherwise it answers `502`, and madAuth tells the user that it can't be sent right now.
 
 Other calls (the sign-up check and events) are answered with `204`, which allows sign-ups. madAuth only sends them if you add their types to `WEBHOOK_EVENTS`; add your own logic to [`src/handler.ts`](src/handler.ts) if you need it.
 
-Costs: SES charges about $0.10 per 1000 e-mails. The Lambda function stays in the free tier for most sites.
+Costs: SES charges about $0.10 per 1000 e-mails; SNS charges per SMS, from about $0.005 in the US to several cents elsewhere. The Lambda function stays in the free tier for most sites.
 
 ## What you need
 
@@ -68,6 +68,8 @@ The guided deploy asks for:
 | `MailFrom` | `"Example" <no-reply@example.com>` |
 | `SendingDomain` | `example.com` (the identity from step 1) |
 | `ConfigurationSet` | leave empty, or see "Bounces and complaints" below |
+| `SendSms` | `false`, or `true` to send madAuth's SMS codes: see "SMS codes" below |
+| `SmsSenderId` | leave empty, or a sender name of 3 to 11 letters and digits, where carriers show one |
 
 Confirm "MailerFunction Function Url has no authentication" with `y`: the function checks every call's signature itself. At the end, SAM prints the output **WebhookUrl**, e.g. `https://abc123.lambda-url.eu-central-1.on.aws/`.
 
@@ -80,10 +82,10 @@ Set these on the madAuth server and restart it:
 ```
 WEBHOOK_URL=https://abc123.lambda-url.eu-central-1.on.aws/
 WEBHOOK_SECRET=<the same secret>
-WEBHOOK_EVENTS=email.verify,email.reset,email.already_registered,email.no_password
+WEBHOOK_EVENTS=email.verify,email.reset,email.signin,email.already_registered,email.no_password
 ```
 
-`WEBHOOK_EVENTS` lists what this function handles: the four e-mails. madAuth then sends nothing else to it. An e-mail type this function doesn't know (from a newer madAuth) is answered with an error, so madAuth doesn't count it as sent: update the function, or take the type out of the list.
+`WEBHOOK_EVENTS` lists what this function handles: the five e-mails (`email.signin` is the passwordless e-mail link of madAuth 0.5; leave it out to keep that method off). With `SendSms=true`, add `sms.code` for the SMS codes. madAuth then sends nothing else to it. An e-mail or SMS type this function doesn't know (from a newer madAuth) is answered with an error, so madAuth doesn't count it as sent: update the function, or take the type out of the list.
 
 ## 6. Test
 
@@ -95,10 +97,21 @@ If it doesn't, check these in order:
 - **`AccessDenied` for a resource `identity/<the recipient's address>`** in the function's log: in the sandbox, SES also checks the policy against the recipient's verified identity, and the function may only use your sending domain. It goes away with production access (step 2).
 - **Your spam folder.** If the e-mail lands there, check that DKIM and DMARC are set up (step 1).
 
+## SMS codes
+
+madAuth 0.5 can ask for a code sent to the user's phone as a second factor (`sms.code` in the madAuth docs). With `SendSms=true`, this function sends those codes with Amazon SNS as transactional SMS, and the SAM template gives it `sns:Publish`. Before that works:
+
+1. **Leave the SMS sandbox.** New accounts can only send to phone numbers you verified in the [SNS console](https://console.aws.amazon.com/sns/) → **Text messaging (SMS)** → **Sandbox destination phone numbers**; that is enough for a test with your own phone. For real users, request production access on that page.
+2. **Raise the spending limit.** SNS stops sending at $1.00 per month by default. Set a higher **Account spend limit** under **Text messaging (SMS)** → **Text messaging preferences** (an AWS support request).
+3. **Check your countries.** Some countries require a registered sender (e.g. a 10DLC or toll-free number in the US, a registered sender ID in India): see [SNS SMS country support](https://docs.aws.amazon.com/sns/latest/dg/sns-supported-regions-countries.html). Where an alphabetic sender ID is shown, `SmsSenderId` sets it.
+4. Deploy again with `sam deploy` and the two parameters, and add `sms.code` to the madAuth server's `WEBHOOK_EVENTS`.
+
+Without `SendSms=true`, an SMS code is answered with an error, so madAuth tells the user that the SMS can't be sent, and the function's log says why. The SMS text is `smsText` in [`src/templates.ts`](src/templates.ts): one segment, with the code and what it is for.
+
 ## Bounces and complaints
 
 SES suspends accounts whose e-mails bounce or are marked as spam too often. Watch the rates under **Account dashboard** → **Reputation metrics**. To record each bounce and complaint, create a **configuration set** with an event destination (e.g. an SNS topic that e-mails you), and deploy again with its name as `ConfigurationSet`.
 
 ## Changing the e-mails
 
-Edit [`src/templates.ts`](src/templates.ts) and deploy again (`sam build && sam deploy`). Each call contains the user's browser language as `data.locale` (e.g. `de-CH`), if you want to send translated e-mails.
+Edit [`src/templates.ts`](src/templates.ts) and deploy again (`sam build && sam deploy`). Each call contains the user's browser language as `data.locale` (e.g. `de-CH`), if you want to send translated e-mails or SMS.

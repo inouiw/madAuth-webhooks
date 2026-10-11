@@ -35,7 +35,10 @@ function parseCall(body: string): Call | null {
   }
 }
 
-/** Handles madAuth's webhook calls: prints e-mails and events, and answers the sign-up check. */
+/** A 6-digit code as it is shown: `513 416`. */
+const spaced = (code: unknown) => `${String(code ?? '').slice(0, 3)} ${String(code ?? '').slice(3)}`;
+
+/** Handles madAuth's webhook calls: prints e-mails, SMS and events, and answers the sign-up check. */
 export function createReceiver(options: ReceiverOptions) {
   const log = options.log ?? ((line: string) => console.log(line));
 
@@ -64,12 +67,18 @@ export function createReceiver(options: ReceiverOptions) {
     }
     const { type, data } = call;
 
-    if (type === 'email.verify' || type === 'email.reset') {
-      const what = type === 'email.verify' ? 'Confirm your e-mail address' : 'Reset your password';
+    if (type === 'email.verify' || type === 'email.reset' || type === 'email.signin') {
+      const what = type === 'email.verify' ? 'Confirm your e-mail address' : type === 'email.reset' ? 'Reset your password' : 'Sign in';
       log(`\n[webhook] E-mail to ${data.to}: ${what} (${data.site})`);
       log(`  Link: ${data.link}`);
-      const code = String(data.code ?? '');
-      log(`  Code: ${code.slice(0, 3)} ${code.slice(3)}\n`);
+      log(`  Code: ${spaced(data.code)}\n`);
+      return reply(200);
+    }
+    if (type === 'sms.code') {
+      // What the code is for: confirming a new number, the second step of a sign-in, or approving a change to the number.
+      const what = data.purpose === 'setup' ? 'Confirm your phone number' : data.purpose === 'approve' ? 'Change your phone number' : 'Sign in';
+      log(`\n[webhook] SMS to ${data.to}: ${what} (${data.site})`);
+      log(`  Code: ${spaced(data.code)}\n`);
       return reply(200);
     }
     if (type === 'email.already_registered' || type === 'email.no_password') {
@@ -89,8 +98,11 @@ export function createReceiver(options: ReceiverOptions) {
       log(`[webhook] user.claims_changed: ${data.email} now has ${JSON.stringify(data.claims ?? {})} (set by ${data.by})`);
       return reply(204);
     }
-    const detail = data.method ?? data.via ?? '';
-    log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${detail ? ` (${detail})` : ''}`);
+    // What else the event says: how they signed in (`password`), and the other fields as `phone: +41…`, `by: admin@…`.
+    const details = Object.entries(data)
+      .filter(([key, value]) => key !== 'user' && value != null && typeof value !== 'object')
+      .map(([key, value]) => (key === 'method' || key === 'via' ? String(value) : `${key}: ${value}`));
+    log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${details.length ? ` (${details.join(', ')})` : ''}`);
     return reply(204);
   };
 }
