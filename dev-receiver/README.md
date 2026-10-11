@@ -47,7 +47,7 @@ WEBHOOK_EVENTS=email.verify,email.reset,email.signin,email.already_registered,em
 
 ## Try the sign-up check
 
-With `signup.before` in the server's `WEBHOOK_EVENTS`, this receiver decides who may sign up, with a password or with Google. Start it with `ALLOWED_EMAIL_DOMAINS` and sign-ups from other domains are refused with a message:
+With `signup.before` in the server's `WEBHOOK_EVENTS`, this receiver decides who may sign up, with a password, with Google or with GitHub. Start it with `ALLOWED_EMAIL_DOMAINS` and sign-ups from other domains are refused with a message:
 
 ```bash
 ALLOWED_EMAIL_DOMAINS=example.com npm run dev

@@ -70,9 +70,10 @@ export function signInMail(to: string, site: string, link: string, code: string)
   });
 }
 
-/** What to tell a user about one of their sign-in methods, by madAuth's method id. An unknown id is named as it is. */
-function describeMethod(method: string): { name: string; label: string; action: string } {
-  if (method === 'google') return { name: 'Google', label: 'your Google account', action: 'Use "Continue with Google" on the sign-in page.' };
+/** What to tell a user about one of their sign-in methods, by madAuth's method id: its button on the sign-in page, or else what to do there. An unknown id is named as it is. */
+function describeMethod(method: string): { name: string; label: string } & ({ button: string } | { action: string }) {
+  if (method === 'google') return { name: 'Google', label: 'your Google account', button: 'Continue with Google' };
+  if (method === 'github') return { name: 'GitHub', label: 'your GitHub account', button: 'Continue with GitHub' };
   if (method === 'email-link') return { name: 'an e-mail link', label: 'a link sent to this address', action: 'Choose "E-mail link" on the sign-in page.' };
   if (method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
   return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
@@ -84,11 +85,16 @@ function describeMethod(method: string): { name: string; label: string; action: 
  */
 function passwordlessHint(methods: string[]): { names: string; labels: string; actions: string } | null {
   if (!methods.length || methods.includes('password')) return null;
-  const described = methods.map(describeMethod);
+  const described = [...new Set(methods)].map(describeMethod);
+  // The buttons share one sentence, in the place of the first one, so the actions keep the order of the methods.
+  const buttons = described.flatMap((d) => ('button' in d ? [`"${d.button}"`] : []));
+  const actions = described.flatMap((d, i) =>
+    'action' in d ? [d.action] : described.findIndex((e) => 'button' in e) === i ? [`Use ${buttons.join(' or ')} on the sign-in page.`] : [],
+  );
   return {
     names: described.map((d) => d.name).join(' or '),
     labels: described.map((d) => d.label).join(' or '),
-    actions: described.map((d) => d.action).join(' '),
+    actions: actions.join(' '),
   };
 }
 
