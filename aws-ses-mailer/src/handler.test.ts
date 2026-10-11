@@ -1,5 +1,6 @@
 import type { LambdaFunctionURLEvent } from 'aws-lambda';
 import { SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { PublishCommand } from '@aws-sdk/client-sns';
 import { describe, expect, it, vi } from 'vitest';
 import { generateWebhookSecret, signWebhook } from '@madauth/server/webhook';
 import { createMailer } from './handler.js';
@@ -20,15 +21,25 @@ function event(type: string, data: Record<string, unknown> | undefined, options:
   } as unknown as LambdaFunctionURLEvent;
 }
 
-function setup(sendImpl: (command: unknown) => Promise<unknown> = async () => ({ MessageId: 'm1' })) {
+function setup(
+  sendImpl: (command: unknown) => Promise<unknown> = async () => ({ MessageId: 'm1' }),
+  sms?: { publish?: (command: unknown) => Promise<unknown>; senderId?: string },
+) {
   const send = vi.fn(sendImpl);
-  const handler = createMailer({ secret, from: '"Example" <no-reply@example.com>', ses: { send } as never });
+  const publish = vi.fn(sms?.publish ?? (async () => ({ MessageId: 's1' })));
+  const handler = createMailer({
+    secret,
+    from: '"Example" <no-reply@example.com>',
+    ses: { send } as never,
+    ...(sms ? { sns: { send: publish } as never, smsSenderId: sms.senderId } : {}),
+  });
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  return { handler, send };
+  return { handler, send, publish };
 }
 
 const reset = { to: 'ada@example.com', link: 'https://app.example.com/#madauth_reset=T', code: '123456', site: 'app.example.com' };
+const sms = { to: '+41791234567', code: '355069', purpose: 'signin', site: 'app.example.com', locale: 'en', user: { id: 'usr_1' } };
 
 describe('AWS SES mailer', () => {
   it('sends the reset e-mail with link and code, and answers 200', async () => {
@@ -125,12 +136,89 @@ describe('AWS SES mailer', () => {
     expect(without.Subject?.Data).toBe('Your account on app.example.com has no password');
   });
 
-  it('answers 400 to an e-mail type it does not know, so madAuth does not count it as sent', async () => {
+  it('sends the sign-in e-mail of the e-mail link with its link and code', async () => {
+    const { handler, send } = setup();
+
+    expect(await handler(event('email.signin', { ...reset, link: 'https://app.example.com/#madauth_signin=T', code: '989624' }))).toEqual({ statusCode: 200 });
+
+    const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
+    expect(content.Subject?.Data).toBe('Sign in to app.example.com');
+    for (const part of [content.Body!.Text!.Data, content.Body!.Html!.Data]) {
+      expect(part).toContain('https://app.example.com/#madauth_signin=T');
+      expect(part).toContain('989 624');
+      expect(part).toContain('15 minutes');
+    }
+  });
+
+  it('names the e-mail link and the authenticator app among the ways a user signs in', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link'] }));
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp'] }));
+
+    const [registered, noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
+    expect(registered.Body!.Text!.Data).toContain('a link sent to this address');
+    expect(registered.Body!.Text!.Data).toContain('Choose "E-mail link" on the sign-in page.');
+    expect(noPassword.Subject?.Data).toBe('You sign in to app.example.com with an authenticator app');
+    expect(noPassword.Body!.Text!.Data).toContain('Choose "Authenticator app" on the sign-in page.');
+  });
+
+  it('sends an SMS code with SNS as a transactional message, and answers 200', async () => {
+    const { handler, send, publish } = setup(undefined, { senderId: 'Example' });
+
+    expect(await handler(event('sms.code', sms))).toEqual({ statusCode: 200 });
+    expect(await handler(event('sms.code', { ...sms, code: '258898', purpose: 'setup' }))).toEqual({ statusCode: 200 });
+
+    expect(send).not.toHaveBeenCalled();
+    const [signIn, setUp] = publish.mock.calls.map((call) => (call[0] as unknown as PublishCommand).input);
+    expect(publish.mock.calls[0][0]).toBeInstanceOf(PublishCommand);
+    expect(signIn.PhoneNumber).toBe('+41791234567');
+    expect(signIn.Message).toBe('355 069 is your code to sign in for app.example.com. It is valid for 10 minutes.');
+    expect(signIn.MessageAttributes).toEqual({
+      'AWS.SNS.SMS.SMSType': { DataType: 'String', StringValue: 'Transactional' },
+      'AWS.SNS.SMS.SenderID': { DataType: 'String', StringValue: 'Example' },
+    });
+    expect(setUp.Message).toBe('258 898 is your code to confirm your phone number for app.example.com. It is valid for 10 minutes.');
+    // Without a sender id, none is sent.
+    const plain = setup(undefined, {});
+    await plain.handler(event('sms.code', { ...sms, purpose: 'approve' }));
+    const input = (plain.publish.mock.calls[0][0] as unknown as PublishCommand).input;
+    expect(input.Message).toContain('to change your phone number');
+    expect(Object.keys(input.MessageAttributes!)).toEqual(['AWS.SNS.SMS.SMSType']);
+  });
+
+  it('answers 502 when SNS does not accept the SMS, and 400 when SMS sending is not set up', async () => {
+    const refused = setup(undefined, {
+      publish: async () => {
+        throw new Error('InvalidParameter: phone number');
+      },
+    });
+    expect(await refused.handler(event('sms.code', sms))).toEqual({ statusCode: 502 });
+
+    const { handler, publish } = setup();
+    expect(await handler(event('sms.code', sms))).toEqual({ statusCode: 400 });
+    expect(publish).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('SendSms=true'));
+  });
+
+  it('accepts the e-mail and SMS events without sending anything', async () => {
+    const { handler, send, publish } = setup(undefined, {});
+
+    for (const type of ['email.verified', 'email.password_reset', 'sms.enabled', 'sms.disabled']) {
+      expect(await handler(event(type, { user: { id: 'usr_1' } }))).toEqual({ statusCode: 204 });
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 to an e-mail or SMS type it does not know, so madAuth does not count it as sent', async () => {
     const { handler, send } = setup();
 
     expect(await handler(event('email.magic_link', { to: 'ada@example.com', link: 'https://app.example.com/' }))).toEqual({ statusCode: 400 });
+    expect(await handler(event('sms.magic', { to: '+41791234567' }))).toEqual({ statusCode: 400 });
     expect(send).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('email.magic_link'));
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('sms.magic'));
   });
 
   it('answers 400 to a signed call without data and sends nothing', async () => {

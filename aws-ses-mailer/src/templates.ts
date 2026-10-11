@@ -1,4 +1,4 @@
-// The e-mails madAuth asks for, as plain text and HTML. Edit the wording here, or use `locale` to translate.
+// The e-mails and SMS madAuth asks for, as plain text and HTML. Edit the wording here, or use `locale` to translate.
 
 export interface Mail {
   to: string;
@@ -54,9 +54,24 @@ export function resetPasswordMail(to: string, site: string, link: string, code: 
   });
 }
 
+/** The sign-in e-mail of the passwordless e-mail link: the link signs in, the code too. */
+export function signInMail(to: string, site: string, link: string, code: string): Mail {
+  return render({
+    to,
+    subject: `Sign in to ${site}`,
+    intro: `Use this link to sign in to ${site}. If you read this on another device, enter the code instead.`,
+    action: `Sign in to ${site}`,
+    link,
+    code,
+    outro: 'The link and the code are valid for 15 minutes and work once. If you did not ask to sign in, ignore this e-mail; nobody can sign in without it.',
+  });
+}
+
 /** What to tell a user about one of their sign-in methods, by madAuth's method id. An unknown id is named as it is. */
 function describeMethod(method: string): { name: string; label: string; action: string } {
   if (method === 'google') return { name: 'Google', label: 'your Google account', action: 'Use "Continue with Google" on the sign-in page.' };
+  if (method === 'email-link') return { name: 'an e-mail link', label: 'a link sent to this address', action: 'Choose "E-mail link" on the sign-in page.' };
+  if (method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
   return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
 }
 
@@ -87,6 +102,16 @@ export function alreadyRegisteredMail(to: string, site: string, link: string, me
       ? `Your account has no password: it signs in with ${hint.labels}. ${hint.actions} If this was not you, ignore this e-mail.`
       : 'If you forgot your password, use "Forgot password?" when signing in. If this was not you, ignore this e-mail.',
   });
+}
+
+/** What an SMS code is for, as madAuth sends it: confirming a new number, the second step of a sign-in, or approving a change to the number. */
+export type SmsPurpose = 'setup' | 'signin' | 'approve';
+
+/** The SMS with a code, short enough for one message segment. `purpose` says what it is for. */
+export function smsText(site: string, code: string, purpose: SmsPurpose | string | undefined): string {
+  const spacedCode = `${code.slice(0, 3)} ${code.slice(3)}`;
+  const what = purpose === 'setup' ? 'to confirm your phone number' : purpose === 'approve' ? 'to change your phone number' : 'to sign in';
+  return `${spacedCode} is your code ${what} for ${site}. It is valid for 10 minutes.`;
 }
 
 /** "Forgot password?" for a user without a password: madAuth sends no reset, the user is told how they sign in. */

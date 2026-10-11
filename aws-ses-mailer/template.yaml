@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: madAuth webhook receiver that sends madAuth's e-mails with Amazon SES.
+Description: madAuth webhook receiver that sends madAuth's e-mails with Amazon SES, and its SMS codes with Amazon SNS.
 
 Parameters:
   WebhookSecret:
@@ -17,9 +17,19 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional SES configuration set, e.g. to record bounces and complaints.
+  SendSms:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Send madAuth's SMS codes (sms.code) with Amazon SNS. Needs SNS SMS set up in the region (see the README).
+  SmsSenderId:
+    Type: String
+    Default: ''
+    Description: Optional sender name for the SMS, 3 to 11 letters and digits, where carriers show one (not in every country).
 
 Conditions:
   HasConfigurationSet: !Not [!Equals [!Ref ConfigurationSet, '']]
+  SendsSms: !Equals [!Ref SendSms, 'true']
 
 Resources:
   MailerFunction:
@@ -36,6 +46,8 @@ Resources:
           WEBHOOK_SECRET: !Ref WebhookSecret
           MAIL_FROM: !Ref MailFrom
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
+          SEND_SMS: !Ref SendSms
+          SMS_SENDER_ID: !Ref SmsSenderId
       # Public URL without AWS authentication: every call is checked against WEBHOOK_SECRET instead.
       FunctionUrlConfig:
         AuthType: NONE
@@ -49,6 +61,16 @@ Resources:
                   - HasConfigurationSet
                   - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSet}
                   - !Ref AWS::NoValue
+            # Publishing to a phone number has no resource ARN: SNS needs "*".
+            - !If
+              - SendsSms
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: '*'
+                Condition:
+                  'ForAllValues:StringLike':
+                    sns:Protocol: ['sms']
+              - !Ref AWS::NoValue
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
