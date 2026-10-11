@@ -35,7 +35,7 @@ describe('dev webhook receiver', () => {
   it('prints e-mails with their link and code', async () => {
     const { send, output } = await start();
 
-    const res = await send('email.verify', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_verify=T', code: '123456', site: 'localhost:3000' });
+    const res = await send('email.send_verification', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_verify=T', code: '123456', site: 'localhost:3000' });
 
     expect(res.status).toBe(200);
     expect(output()).toContain('E-mail to ada@example.com: Confirm your e-mail address');
@@ -46,7 +46,7 @@ describe('dev webhook receiver', () => {
   it('prints the sign-in e-mail of the e-mail link with its link and code', async () => {
     const { send, output } = await start();
 
-    const res = await send('email.signin', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_signin=T', code: '989624', site: 'localhost:3000' });
+    const res = await send('email.send_signin_link', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_signin=T', code: '989624', site: 'localhost:3000' });
 
     expect(res.status).toBe(200);
     expect(output()).toContain('E-mail to ada@example.com: Sign in (localhost:3000)');
@@ -57,9 +57,9 @@ describe('dev webhook receiver', () => {
   it('prints an SMS code with its number and what it is for', async () => {
     const { send, output } = await start();
 
-    expect((await send('sms.code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' })).status).toBe(200);
-    expect((await send('sms.code', { to: '+41791234567', code: '355069', purpose: 'signin', site: 'localhost' })).status).toBe(200);
-    expect((await send('sms.code', { to: '+41791234567', code: '000111', purpose: 'approve', site: 'localhost' })).status).toBe(200);
+    expect((await send('sms.send_code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' })).status).toBe(200);
+    expect((await send('sms.send_code', { to: '+41791234567', code: '355069', purpose: 'signin', site: 'localhost' })).status).toBe(200);
+    expect((await send('sms.send_code', { to: '+41791234567', code: '000111', purpose: 'approve', site: 'localhost' })).status).toBe(200);
 
     expect(output()).toContain('SMS to +41791234567: Confirm your phone number (localhost)');
     expect(output()).toContain('Code: 258 898');
@@ -71,7 +71,7 @@ describe('dev webhook receiver', () => {
   it('prints the e-mail for a user who has no password to reset, with how they sign in', async () => {
     const { send, output } = await start();
 
-    const res = await send('email.no_password', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google'] });
+    const res = await send('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google'] });
 
     expect(res.status).toBe(200);
     expect(output()).toContain('E-mail to ada@example.com: You have no password to reset (localhost:3000), signs in with: google');
@@ -81,7 +81,7 @@ describe('dev webhook receiver', () => {
   it('prints the "already registered" e-mail with how the user signs in', async () => {
     const { send, output } = await start();
 
-    const res = await send('email.already_registered', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google', 'password'] });
+    const res = await send('email.send_already_registered', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google', 'password'] });
 
     expect(res.status).toBe(200);
     expect(output()).toContain('E-mail to ada@example.com: You already have an account (localhost:3000), signs in with: google, password');
@@ -90,15 +90,15 @@ describe('dev webhook receiver', () => {
   it('rejects calls without a valid signature', async () => {
     const { send, output } = await start();
 
-    expect((await send('email.verify', { to: 'ada@example.com' }, false)).status).toBe(401);
+    expect((await send('email.send_verification', { to: 'ada@example.com' }, false)).status).toBe(401);
     expect(output()).toContain('wrong signature');
   });
 
   it('answers the sign-up check, optionally limited to some domains', async () => {
     const { send } = await start({ allowedDomains: ['example.com'] });
 
-    expect(await (await send('signup.before', { email: 'ada@example.com' })).json()).toEqual({ allow: true });
-    expect(await (await send('signup.before', { email: 'x@other.org' })).json()).toEqual({
+    expect(await (await send('user.signing_up', { email: 'ada@example.com' })).json()).toEqual({ allow: true });
+    expect(await (await send('user.signing_up', { email: 'x@other.org' })).json()).toEqual({
       allow: false,
       message: 'Only addresses at example.com can sign up.',
     });
@@ -109,21 +109,35 @@ describe('dev webhook receiver', () => {
 
     expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'password' })).status).toBe(204);
     expect(output()).toContain('user.signed_in: ada@example.com (password)');
-    expect((await send('sms.enabled', { user: { id: 'usr_1', email: 'ada@example.com' }, phone: '+41791234567' })).status).toBe(204);
-    expect(output()).toContain('sms.enabled: ada@example.com (phone: +41791234567)');
-    expect((await send('totp.recovery_code_used', { user: { id: 'usr_1', email: 'ada@example.com' }, remaining: 9 })).status).toBe(204);
-    expect(output()).toContain('totp.recovery_code_used: ada@example.com (remaining: 9)');
+    expect((await send('user.second_factor_enabled', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'sms', phone: '+41791234567' })).status).toBe(204);
+    expect(output()).toContain('user.second_factor_enabled: ada@example.com (sms, phone: +41791234567)');
+    expect((await send('user.signed_up', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'google' })).status).toBe(204);
+    expect(output()).toContain('user.signed_up: ada@example.com (google)');
+    expect((await send('user.recovery_code_used', { user: { id: 'usr_1', email: 'ada@example.com' }, remaining: 9 })).status).toBe(204);
+    expect(output()).toContain('user.recovery_code_used: ada@example.com (remaining: 9)');
   });
 
   it('prints claim changes with the address, the claims and who set them', async () => {
     const { send, output } = await start();
-    const data = { userId: 'usr_1', email: 'ada@example.com', by: 'grace@example.com' };
+    const data = { user: { id: 'usr_1', email: 'ada@example.com' }, by: 'grace@example.com' };
 
     expect((await send('user.claims_changed', { ...data, claims: { roles: ['admin', 'editor'] } })).status).toBe(204);
-    expect((await send('user.claims_changed', { ...data, claims: {} })).status).toBe(204);
+    // madAuth before 0.5 sent the address as `email`.
+    expect((await send('user.claims_changed', { userId: 'usr_1', email: 'ada@example.com', by: 'grace@example.com', claims: {} })).status).toBe(204);
 
     expect(output()).toContain('user.claims_changed: ada@example.com now has {"roles":["admin","editor"]} (set by grace@example.com)');
     expect(output()).toContain('user.claims_changed: ada@example.com now has {} (set by grace@example.com)');
+  });
+
+  it('understands the names of a madAuth server from before 0.5', async () => {
+    const { send, output } = await start({ allowedDomains: ['example.com'] });
+
+    expect((await send('email.verify', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_verify=T', code: '123456', site: 'localhost:3000' })).status).toBe(200);
+    expect((await send('sms.code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' })).status).toBe(200);
+    expect(await (await send('signup.before', { email: 'x@other.org' })).json()).toMatchObject({ allow: false });
+
+    expect(output()).toContain('E-mail to ada@example.com: Confirm your e-mail address (localhost:3000)');
+    expect(output()).toContain('SMS to +41791234567: Confirm your phone number (localhost)');
   });
 
   it('answers 400 to a signed call without data, and keeps running', async () => {
@@ -136,8 +150,8 @@ describe('dev webhook receiver', () => {
   it("prints a GitHub user's sign-in method in e-mails, the sign-up check and events", async () => {
     const { send, output } = await start();
 
-    expect((await send('email.already_registered', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['github'] })).status).toBe(200);
-    expect(await (await send('signup.before', { email: 'ada@example.com', method: 'github' })).json()).toEqual({ allow: true });
+    expect((await send('email.send_already_registered', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['github'] })).status).toBe(200);
+    expect(await (await send('user.signing_up', { email: 'ada@example.com', method: 'github' })).json()).toEqual({ allow: true });
     expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'github' })).status).toBe(204);
 
     expect(output()).toContain('You already have an account (localhost:3000), signs in with: github');

@@ -40,14 +40,16 @@ WEBHOOK_URL=http://localhost:8790/webhook WEBHOOK_SECRET=whsec_... npm run dev
 The madAuth server only sends the types listed in its `WEBHOOK_EVENTS`. To see everything here, list them all on the server:
 
 ```
-WEBHOOK_EVENTS=email.verify,email.reset,email.signin,email.already_registered,email.no_password,signup.before,user.created,email.verified,email.password_reset,user.signed_in,user.deleted,user.claims_changed,totp.enabled,totp.disabled,totp.recovery_code_used,sms.code,sms.enabled,sms.disabled
+WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_signin_link,email.send_already_registered,email.send_password_reset_no_password,sms.send_code,user.signing_up,user.signed_up,user.email_verified,user.password_reset,user.signed_in,user.deleted,user.claims_changed,user.second_factor_enabled,user.second_factor_disabled,user.recovery_code_used
 ```
 
-`email.signin` switches the passwordless e-mail link on and `sms.code` SMS codes as a second factor (madAuth 0.5): their links and codes appear here like the others.
+`email.send_signin_link` switches the passwordless e-mail link on and `sms.send_code` SMS codes as a second factor (madAuth 0.5): their links and codes appear here like the others.
+
+These are the names of madAuth 0.5. A server from before sends `email.verify`, `email.reset`, `email.signin`, `email.already_registered`, `email.no_password`, `sms.code` and `signup.before`, and this receiver understands those too.
 
 ## Try the sign-up check
 
-With `signup.before` in the server's `WEBHOOK_EVENTS`, this receiver decides who may sign up, with a password, with Google or with GitHub. Start it with `ALLOWED_EMAIL_DOMAINS` and sign-ups from other domains are refused with a message:
+With `user.signing_up` in the server's `WEBHOOK_EVENTS`, this receiver decides who may sign up, with a password, with Google or with GitHub. Start it with `ALLOWED_EMAIL_DOMAINS` and sign-ups from other domains are refused with a message:
 
 ```bash
 ALLOWED_EMAIL_DOMAINS=example.com npm run dev
@@ -56,7 +58,7 @@ ALLOWED_EMAIL_DOMAINS=example.com npm run dev
 ## If nothing appears
 
 - **`Rejected a call with a wrong signature`**: the server and the receiver have different `WEBHOOK_SECRET` values.
-- **The madAuth server logs `Webhook "email.verify" … failed`** (or `"sms.code"`): the receiver is not running, or `WEBHOOK_URL` on the server points elsewhere.
+- **The madAuth server logs `Webhook "email.send_verification" … failed`** (or `"sms.send_code"`): the receiver is not running, or `WEBHOOK_URL` on the server points elsewhere.
 - **A madAuth server in Docker** reaches a receiver on your machine at `http://host.docker.internal:8790/webhook`.
 
 ## The code
