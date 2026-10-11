@@ -80,8 +80,8 @@ describe('AWS SES mailer', () => {
     expect(subjects).toEqual([
       'Confirm your e-mail address for app.example.com',
       'Reset your password for app.example.com',
-      expect.stringContaining('app.example.com'),
-      expect.stringContaining('app.example.com'),
+      'Sign in to app.example.com',
+      'You already have an account on app.example.com',
       'You sign in to app.example.com with Google',
     ]);
     expect(publish).toHaveBeenCalledOnce();

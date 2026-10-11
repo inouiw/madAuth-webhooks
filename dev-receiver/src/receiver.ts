@@ -4,7 +4,7 @@ import { verifyWebhook } from '@madauth/server/webhook';
 export interface ReceiverOptions {
   /** The same WEBHOOK_SECRET madAuth uses. */
   secret: string;
-  /** If set, only these e-mail domains may sign up (answers signup.before). */
+  /** If set, only these e-mail domains may sign up (answers user.signing_up, signup.before before madAuth 0.5). */
   allowedDomains?: string[];
   /** Where to print; the terminal by default. */
   log?: (line: string) => void;

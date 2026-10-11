@@ -123,7 +123,7 @@ export function createMailer(options: MailerOptions) {
 /** Hands an SMS code to SNS as a transactional message; 200 once SNS accepted it. */
 async function sendSms(options: MailerOptions, data: Record<string, any>): Promise<LambdaFunctionURLResult> {
   if (!options.sns) {
-    console.error('An SMS code arrived, but SMS sending is not set up: deploy with SendSms=true, or take sms.code out of the madAuth server\'s WEBHOOK_EVENTS.');
+    console.error('An SMS code arrived, but SMS sending is not set up: deploy with SendSms=true, or take sms.send_code (sms.code before madAuth 0.5) out of the madAuth server\'s WEBHOOK_EVENTS.');
     return { statusCode: 400 };
   }
   const to = String(data.to ?? '');

@@ -132,12 +132,33 @@ describe('dev webhook receiver', () => {
   it('understands the names of a madAuth server from before 0.5', async () => {
     const { send, output } = await start({ allowedDomains: ['example.com'] });
 
-    expect((await send('email.verify', { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_verify=T', code: '123456', site: 'localhost:3000' })).status).toBe(200);
-    expect((await send('sms.code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' })).status).toBe(200);
+    const mail = { to: 'ada@example.com', link: 'http://localhost:3000/#madauth_verify=T', code: '123456', site: 'localhost:3000' };
+    const account = { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['google'] };
+
+    // All seven, each down its own path: a wrong entry would end as an event (204, one line) instead.
+    for (const [type, data] of [
+      ['email.verify', mail],
+      ['email.reset', mail],
+      ['email.signin', mail],
+      ['email.already_registered', account],
+      ['email.no_password', account],
+      ['sms.code', { to: '+41791234567', code: '258898', purpose: 'setup', site: 'localhost' }],
+    ] as const) {
+      expect((await send(type, data)).status).toBe(200);
+    }
     expect(await (await send('signup.before', { email: 'x@other.org' })).json()).toMatchObject({ allow: false });
 
-    expect(output()).toContain('E-mail to ada@example.com: Confirm your e-mail address (localhost:3000)');
-    expect(output()).toContain('SMS to +41791234567: Confirm your phone number (localhost)');
+    for (const line of [
+      'E-mail to ada@example.com: Confirm your e-mail address (localhost:3000)',
+      'E-mail to ada@example.com: Reset your password (localhost:3000)',
+      'E-mail to ada@example.com: Sign in (localhost:3000)',
+      'E-mail to ada@example.com: You already have an account (localhost:3000), signs in with: google',
+      'E-mail to ada@example.com: You have no password to reset (localhost:3000), signs in with: google',
+      'SMS to +41791234567: Confirm your phone number (localhost)',
+      'Sign-up check for x@other.org (password): refused',
+    ]) {
+      expect(output()).toContain(line);
+    }
   });
 
   it('answers 400 to a signed call without data, and keeps running', async () => {
