@@ -103,4 +103,16 @@ describe('dev webhook receiver', () => {
     expect((await send('user.signed_in', undefined)).status).toBe(400);
     expect((await send('user.signed_in', { user: { id: 'usr_1' } })).status).toBe(204);
   });
+
+  it("prints a GitHub user's sign-in method in e-mails, the sign-up check and events", async () => {
+    const { send, output } = await start();
+
+    expect((await send('email.already_registered', { to: 'ada@example.com', link: 'http://localhost:3000/', site: 'localhost:3000', methods: ['github'] })).status).toBe(200);
+    expect(await (await send('signup.before', { email: 'ada@example.com', method: 'github' })).json()).toEqual({ allow: true });
+    expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'github' })).status).toBe(204);
+
+    expect(output()).toContain('You already have an account (localhost:3000), signs in with: github');
+    expect(output()).toContain('Sign-up check for ada@example.com (github): allowed');
+    expect(output()).toContain('user.signed_in: ada@example.com (github)');
+  });
 });

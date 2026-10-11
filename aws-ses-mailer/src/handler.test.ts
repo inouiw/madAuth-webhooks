@@ -139,4 +139,37 @@ describe('AWS SES mailer', () => {
     expect(await handler(event('email.verify', undefined))).toEqual({ statusCode: 400 });
     expect(send).not.toHaveBeenCalled();
   });
+
+  it('tells a GitHub-only user who asked for a reset that there is no password, and to continue with GitHub', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
+
+    const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
+    expect(content.Subject?.Data).toBe('You sign in to app.example.com with GitHub');
+    expect(content.Body!.Text!.Data).toContain('your GitHub account');
+    expect(content.Body!.Text!.Data).toContain('Continue with GitHub');
+  });
+
+  it('tells a GitHub-only user who is "already registered" to use GitHub, not "Forgot password?"', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['github'] }));
+
+    const text = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!.Body!.Text!.Data!;
+    expect(text).toContain('Continue with GitHub');
+    expect(text).not.toContain('Forgot password?');
+  });
+
+  it('names both Google and GitHub for a user who signs in with either', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['google', 'github'] }));
+
+    const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
+    expect(content.Subject?.Data).toBe('You sign in to app.example.com with Google or GitHub');
+    expect(content.Body!.Text!.Data).toContain('it signs in with your Google account or your GitHub account.');
+    expect(content.Body!.Text!.Data).toContain('Use "Continue with Google" or "Continue with GitHub" on the sign-in page.');
+    expect(content.Body!.Html!.Data).toContain('your Google account or your GitHub account');
+  });
 });

@@ -54,10 +54,11 @@ export function resetPasswordMail(to: string, site: string, link: string, code: 
   });
 }
 
-/** What to tell a user about one of their sign-in methods, by madAuth's method id. An unknown id is named as it is. */
-function describeMethod(method: string): { name: string; label: string; action: string } {
-  if (method === 'google') return { name: 'Google', label: 'your Google account', action: 'Use "Continue with Google" on the sign-in page.' };
-  return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
+/** What to tell a user about one of their sign-in methods, by madAuth's method id: its button on the sign-in page, if known. An unknown id is named as it is. */
+function describeMethod(method: string): { name: string; label: string; button?: string } {
+  if (method === 'google') return { name: 'Google', label: 'your Google account', button: 'Continue with Google' };
+  if (method === 'github') return { name: 'GitHub', label: 'your GitHub account', button: 'Continue with GitHub' };
+  return { name: method, label: method };
 }
 
 /**
@@ -67,10 +68,15 @@ function describeMethod(method: string): { name: string; label: string; action: 
 function passwordlessHint(methods: string[]): { names: string; labels: string; actions: string } | null {
   if (!methods.length || methods.includes('password')) return null;
   const described = methods.map(describeMethod);
+  const buttons = described.flatMap((d) => (d.button ? [`"${d.button}"`] : []));
+  const actions = [
+    ...(buttons.length ? [`Use ${buttons.join(' or ')} on the sign-in page.`] : []),
+    ...described.filter((d) => !d.button).map((d) => `Sign in with ${d.name} on the sign-in page.`),
+  ];
   return {
     names: described.map((d) => d.name).join(' or '),
     labels: described.map((d) => d.label).join(' or '),
-    actions: described.map((d) => d.action).join(' '),
+    actions: actions.join(' '),
   };
 }
 
