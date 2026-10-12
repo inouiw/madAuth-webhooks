@@ -26,11 +26,11 @@ Each folder stands alone: its own `package.json`, `node_modules`, tests and READ
 - **Then review the pull request as a real GitHub code review**, not just a summary comment. Run `/code-review --comment`, which posts each finding as an **inline review comment anchored to the exact file and line** on the PR. Do not post findings only as a plain `gh pr comment` timeline comment. Address any findings before considering the work done.
   - **Keep review feedback concise:** one sentence per finding — state the problem and its impact, no preamble. Only report real issues; no "looks good" filler comments.
   - **Control the depth with the effort level — always at least `medium`.** Default to `/code-review medium --comment`. Use `high` (up to `max`) only when broad coverage matters more than noise. Do not use `low` — it misses too much for reviews that gate merging.
-- **After changing the dev receiver, run it against a local madAuth server** (the `server` and `webhooks` launch configs of a madAuth checkout) and trigger the e-mails or SMS you changed — check that the link or code is printed and that madAuth reports no failed hand-over.
+- **After changing the dev receiver, run it against a local madAuth server** (the `server` and `webhooks` launch configs of a madAuth checkout) and trigger the e-mails or SMS you changed. The receiver's `.env` needs the server's `WEBHOOK_SECRET`, and the server's `WEBHOOK_EVENTS` must list the type, or the call fails with 401 or is never sent — check that the link or code is printed and that madAuth reports no failed hand-over.
   - **Stop the processes when you are done testing**, so the ports are free for the next agent session.
   - **If a port is already in use, do not kill the occupying process on your own** — it may belong to another still-running agent session. Ask the user first.
 - **Keep both receivers in step with madAuth.** When madAuth adds or renames a webhook type, handle it in both receivers, keep accepting the old names while released madAuth versions still send them, and update the READMEs.
-- **Check for missing AWS permissions.** Locally, code runs with your own AWS credentials, which are broader than the deployed Lambda role. For every new or changed AWS call (SES, SNS, …), verify that the policy in `aws-ses-mailer/template.yaml` grants it.
+- **Check for missing AWS permissions.** Locally, code runs with your own AWS credentials, which are broader than the deployed Lambda role. For every new or changed AWS call (SES, SNS, …), verify that the policy in `aws-ses-mailer/template.yaml` grants it — and in madAuth's `site/infra/lib/site-stack.ts`, which bundles `aws-ses-mailer/src/handler.ts` into the madauth.com stack with its own IAM policy. Moving or renaming that handler breaks madAuth's infra build too.
 
 ### Coding guidelines
 
@@ -40,7 +40,7 @@ Each folder stands alone: its own `package.json`, `node_modules`, tests and READ
 
 ### Testing
 
-In every folder you change, run `npm run typecheck` and `npm test` before considering a task done.
+In every folder you change, run `npm run typecheck` and `npm test` before considering a task done. After changing `aws-ses-mailer/template.yaml`, also run `sam validate --lint` in that folder.
 
 ### Documentation
 
