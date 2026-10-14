@@ -76,6 +76,7 @@ function describeMethod(method: string): { name: string; label: string } & ({ bu
   if (method === 'github') return { name: 'GitHub', label: 'your GitHub account', button: 'Continue with GitHub' };
   if (method === 'email-link') return { name: 'an e-mail link', label: 'a link sent to this address', action: 'Choose "E-mail link" on the sign-in page.' };
   if (method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
+  if (method === 'passkey') return { name: 'a passkey', label: 'a passkey', button: 'Sign in with a passkey' };
   return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
 }
 

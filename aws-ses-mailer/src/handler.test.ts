@@ -153,13 +153,24 @@ describe('AWS SES mailer', () => {
   it('names a sign-in method it does not know, and says only "no password" without any', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['carrier-pigeon'] }));
     await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com' }));
 
-    const [withPasskey, without] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
-    expect(withPasskey.Subject?.Data).toBe('You sign in to app.example.com with passkey');
-    expect(withPasskey.Body!.Text!.Data).toContain('Sign in with passkey on the sign-in page.');
+    const [withUnknown, without] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
+    expect(withUnknown.Subject?.Data).toBe('You sign in to app.example.com with carrier-pigeon');
+    expect(withUnknown.Body!.Text!.Data).toContain('Sign in with carrier-pigeon on the sign-in page.');
     expect(without.Subject?.Data).toBe('Your account on app.example.com has no password');
+  });
+
+  it('sends a user who signs in with a passkey alone (e.g. who signed up with one) to the passkey button', async () => {
+    const { handler, send } = setup();
+
+    await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['passkey'] }));
+
+    const [registered, noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
+    expect(registered.Body!.Text!.Data).toContain('Your account has no password: it signs in with a passkey. Use "Sign in with a passkey" on the sign-in page.');
+    expect(noPassword.Subject?.Data).toBe('You sign in to app.example.com with a passkey');
   });
 
   it('sends the sign-in e-mail of the e-mail link with its link and code', async () => {
@@ -299,12 +310,12 @@ describe('AWS SES mailer', () => {
   it('keeps the order of the methods when a button method comes after one with its own action, and names a repeated method once', async () => {
     const { handler, send } = setup();
 
-    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link', 'github', 'github', 'passkey'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link', 'github', 'github', 'carrier-pigeon'] }));
 
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
-    expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or passkey');
+    expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or carrier-pigeon');
     expect(content.Body!.Text!.Data).toContain(
-      'Choose "E-mail link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with passkey on the sign-in page.',
+      'Choose "E-mail link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with carrier-pigeon on the sign-in page.',
     );
   });
 });
