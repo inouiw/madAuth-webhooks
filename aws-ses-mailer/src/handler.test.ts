@@ -181,8 +181,9 @@ describe('AWS SES mailer', () => {
 
     await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link'] }));
     await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['authenticator'] }));
-    // The app's id before madAuth 0.6.
+    // The app's id before madAuth 0.6, named once also next to the new one.
     await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp', 'authenticator'] }));
 
     const [registered, ...noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
     expect(registered.Body!.Text!.Data).toContain('a link sent to this address');
@@ -191,7 +192,7 @@ describe('AWS SES mailer', () => {
       expect(mail.Subject?.Data).toBe('You sign in to app.example.com with an authenticator app');
       expect(mail.Body!.Text!.Data).toContain('Choose "Authenticator app" on the sign-in page.');
     }
-    expect(noPassword).toHaveLength(2);
+    expect(noPassword).toHaveLength(3);
   });
 
   it('sends an SMS code with SNS as a transactional message, and answers 200', async () => {

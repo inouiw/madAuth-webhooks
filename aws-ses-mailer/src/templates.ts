@@ -75,8 +75,7 @@ function describeMethod(method: string): { name: string; label: string } & ({ bu
   if (method === 'google') return { name: 'Google', label: 'your Google account', button: 'Continue with Google' };
   if (method === 'github') return { name: 'GitHub', label: 'your GitHub account', button: 'Continue with GitHub' };
   if (method === 'email-link') return { name: 'an e-mail link', label: 'a link sent to this address', action: 'Choose "E-mail link" on the sign-in page.' };
-  // `totp` is the app's id before madAuth 0.6.
-  if (method === 'authenticator' || method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
+  if (method === 'authenticator') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
   return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
 }
 
@@ -86,7 +85,8 @@ function describeMethod(method: string): { name: string; label: string } & ({ bu
  */
 function passwordlessHint(methods: string[]): { names: string; labels: string; actions: string } | null {
   if (!methods.length || methods.includes('password')) return null;
-  const described = [...new Set(methods)].map(describeMethod);
+  // `totp` is the authenticator app's id before madAuth 0.6.
+  const described = [...new Set(methods.map((method) => (method === 'totp' ? 'authenticator' : method)))].map(describeMethod);
   // The buttons share one sentence, in the place of the first one, so the actions keep the order of the methods.
   const buttons = described.flatMap((d) => ('button' in d ? [`"${d.button}"`] : []));
   const actions = described.flatMap((d, i) =>
