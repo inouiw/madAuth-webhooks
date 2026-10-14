@@ -75,7 +75,8 @@ function describeMethod(method: string): { name: string; label: string } & ({ bu
   if (method === 'google') return { name: 'Google', label: 'your Google account', button: 'Continue with Google' };
   if (method === 'github') return { name: 'GitHub', label: 'your GitHub account', button: 'Continue with GitHub' };
   if (method === 'email-link') return { name: 'an e-mail link', label: 'a link sent to this address', action: 'Choose "E-mail link" on the sign-in page.' };
-  if (method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
+  // `totp` is the app's id before madAuth 0.6.
+  if (method === 'authenticator' || method === 'totp') return { name: 'an authenticator app', label: 'a code from your authenticator app', action: 'Choose "Authenticator app" on the sign-in page.' };
   return { name: method, label: method, action: `Sign in with ${method} on the sign-in page.` };
 }
 
