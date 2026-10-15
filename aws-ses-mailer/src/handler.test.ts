@@ -187,7 +187,7 @@ describe('AWS SES mailer', () => {
 
     const [registered, ...noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
     expect(registered.Body!.Text!.Data).toContain('a link sent to this address');
-    expect(registered.Body!.Text!.Data).toContain('Choose "E-mail link" on the sign-in page.');
+    expect(registered.Body!.Text!.Data).toContain('Choose "Email link" on the sign-in page.');
     for (const mail of noPassword) {
       expect(mail.Subject?.Data).toBe('You sign in to app.example.com with an authenticator app');
       expect(mail.Body!.Text!.Data).toContain('Choose "Authenticator app" on the sign-in page.');
@@ -310,7 +310,7 @@ describe('AWS SES mailer', () => {
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or passkey');
     expect(content.Body!.Text!.Data).toContain(
-      'Choose "E-mail link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with passkey on the sign-in page.',
+      'Choose "Email link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with passkey on the sign-in page.',
     );
   });
 });
