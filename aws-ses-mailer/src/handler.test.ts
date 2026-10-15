@@ -191,13 +191,19 @@ describe('AWS SES mailer', () => {
     const { handler, send } = setup();
 
     await handler(event('email.send_already_registered', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['email-link'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['authenticator'] }));
+    // The app's id before madAuth 0.6, named once also next to the new one.
     await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp'] }));
+    await handler(event('email.send_password_reset_no_password', { to: 'ada@example.com', link: 'https://app.example.com/', site: 'app.example.com', methods: ['totp', 'authenticator'] }));
 
-    const [registered, noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
+    const [registered, ...noPassword] = send.mock.calls.map((call) => (call[0] as unknown as SendEmailCommand).input.Content!.Simple!);
     expect(registered.Body!.Text!.Data).toContain('a link sent to this address');
-    expect(registered.Body!.Text!.Data).toContain('Choose "E-mail link" on the sign-in page.');
-    expect(noPassword.Subject?.Data).toBe('You sign in to app.example.com with an authenticator app');
-    expect(noPassword.Body!.Text!.Data).toContain('Choose "Authenticator app" on the sign-in page.');
+    expect(registered.Body!.Text!.Data).toContain('Choose "Email link" on the sign-in page.');
+    for (const mail of noPassword) {
+      expect(mail.Subject?.Data).toBe('You sign in to app.example.com with an authenticator app');
+      expect(mail.Body!.Text!.Data).toContain('Choose "Authenticator app" on the sign-in page.');
+    }
+    expect(noPassword).toHaveLength(3);
   });
 
   it('sends an SMS code with SNS as a transactional message, and answers 200', async () => {
@@ -315,7 +321,7 @@ describe('AWS SES mailer', () => {
     const content = (send.mock.calls[0][0] as unknown as SendEmailCommand).input.Content!.Simple!;
     expect(content.Subject?.Data).toBe('You sign in to app.example.com with an e-mail link or GitHub or carrier-pigeon');
     expect(content.Body!.Text!.Data).toContain(
-      'Choose "E-mail link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with carrier-pigeon on the sign-in page.',
+      'Choose "Email link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with carrier-pigeon on the sign-in page.',
     );
   });
 });
