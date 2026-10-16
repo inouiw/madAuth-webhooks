@@ -3,7 +3,7 @@ import { SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { PublishCommand } from '@aws-sdk/client-sns';
 import { describe, expect, it, vi } from 'vitest';
 import { generateWebhookSecret, signWebhook } from '@madauth/server/webhook';
-import { createMailer } from './handler.js';
+import { callerFromEnv, createMailer } from './handler.js';
 
 const secret = generateWebhookSecret();
 
@@ -100,6 +100,14 @@ describe('AWS SES mailer', () => {
 
     expect(await handler(event('email.send_password_reset', reset, { sign: false }))).toEqual({ statusCode: 401 });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('with the secret, also takes a call that AWS checked at an AWS_IAM Function URL, as long as it is signed with the secret', async () => {
+    const { handler, send } = setup();
+
+    expect(await handler(withIamCaller(event('email.send_password_reset', reset), MADAUTH_CALLER))).toEqual({ statusCode: 200 });
+    expect(await handler(withIamCaller(event('email.send_password_reset', reset, { sign: false }), MADAUTH_CALLER))).toEqual({ statusCode: 401 });
+    expect(send).toHaveBeenCalledOnce();
   });
 
   it('allows the sign-up check and accepts events without sending', async () => {
@@ -323,5 +331,83 @@ describe('AWS SES mailer', () => {
     expect(content.Body!.Text!.Data).toContain(
       'Choose "Email link" on the sign-in page. Use "Continue with GitHub" on the sign-in page. Sign in with carrier-pigeon on the sign-in page.',
     );
+  });
+});
+
+const MADAUTH_ROLE = 'arn:aws:iam::123456789012:role/MadAuthSite-MadAuthFunctionServiceRole-AbC123';
+// What AWS passes for a call signed by a Lambda function with that role: the session is the function's name.
+const MADAUTH_CALLER = 'arn:aws:sts::123456789012:assumed-role/MadAuthSite-MadAuthFunctionServiceRole-AbC123/MadAuthSite-MadAuthFunction-XyZ789';
+
+/** The call as a Function URL with AWS_IAM auth passes it: with the caller AWS checked, and without madAuth's secret. */
+function withIamCaller(call: LambdaFunctionURLEvent, userArn: string): LambdaFunctionURLEvent {
+  return { ...call, requestContext: { authorizer: { iam: { accountId: userArn.split(':')[4], userArn } } } } as unknown as LambdaFunctionURLEvent;
+}
+
+function iamEvent(type: string, data: Record<string, unknown>, userArn?: string): LambdaFunctionURLEvent {
+  const body = JSON.stringify({ type, data });
+  const call = { headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': String(Math.floor(Date.now() / 1000)) }, body, isBase64Encoded: false } as unknown as LambdaFunctionURLEvent;
+  return userArn === undefined ? call : withIamCaller(call, userArn);
+}
+
+describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
+  function setupIam(madauthRoleArn = MADAUTH_ROLE) {
+    const send = vi.fn(async () => ({ MessageId: 'm1' }));
+    const handler = createMailer({ madauthRoleArn, from: '"Example" <no-reply@example.com>', ses: { send } as never });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    return { handler, send };
+  }
+
+  it("sends the e-mail of a call of madAuth's role, which needs no secret", async () => {
+    const { handler, send } = setupIam();
+
+    expect(await handler(iamEvent('email.send_password_reset', reset, MADAUTH_CALLER))).toEqual({ statusCode: 200 });
+    expect(send).toHaveBeenCalledOnce();
+    // The role's path isn't in the caller's ARN: a role with one is known by its account and name too.
+    const withPath = setupIam('arn:aws:iam::123456789012:role/service-role/MadAuthSite-MadAuthFunctionServiceRole-AbC123');
+    expect(await withPath.handler(iamEvent('email.send_password_reset', reset, MADAUTH_CALLER))).toEqual({ statusCode: 200 });
+  });
+
+  it('refuses a call without AWS IAM authentication, also one signed with a secret: the Function URL has NONE auth', async () => {
+    const { handler, send } = setupIam();
+
+    expect(await handler(iamEvent('email.send_password_reset', reset))).toEqual({ statusCode: 401 });
+    expect(await handler(event('email.send_password_reset', reset))).toEqual({ statusCode: 401 });
+    expect(send).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('the Function URL must have AWS_IAM auth'));
+  });
+
+  it('refuses a call of any other caller of the account, and says who called', async () => {
+    const { handler, send } = setupIam();
+
+    for (const userArn of [
+      // Another role, another account's role of the same name, the same role in another partition, a user, the account.
+      'arn:aws:sts::123456789012:assumed-role/Admin/ada',
+      'arn:aws:sts::210987654321:assumed-role/MadAuthSite-MadAuthFunctionServiceRole-AbC123/MadAuthSite-MadAuthFunction-XyZ789',
+      'arn:aws-cn:sts::123456789012:assumed-role/MadAuthSite-MadAuthFunctionServiceRole-AbC123/MadAuthSite-MadAuthFunction-XyZ789',
+      'arn:aws:iam::123456789012:user/ada',
+      'arn:aws:iam::123456789012:root',
+      // The role's ARN itself, as no caller AWS checked has it.
+      MADAUTH_ROLE,
+      '',
+    ]) {
+      expect(await handler(iamEvent('email.send_password_reset', reset, userArn))).toEqual({ statusCode: 403 });
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rejected a call of arn:aws:sts::123456789012:assumed-role/Admin/ada: only madAuth's role"));
+  });
+
+  it('refuses every call when MADAUTH_ROLE_ARN is no role ARN', async () => {
+    const { handler, send } = setupIam('arn:aws:iam::123456789012:user/madauth');
+
+    expect(await handler(iamEvent('email.send_password_reset', reset, 'arn:aws:sts::123456789012:assumed-role/madauth/x'))).toEqual({ statusCode: 403 });
+    expect(send).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("MADAUTH_ROLE_ARN must be a role's ARN"));
+  });
+
+  it('takes the caller from MADAUTH_ROLE_ARN or WEBHOOK_SECRET, and refuses both', () => {
+    expect(callerFromEnv({ MADAUTH_ROLE_ARN: ` ${MADAUTH_ROLE} ` })).toEqual({ madauthRoleArn: MADAUTH_ROLE });
+    expect(callerFromEnv({ WEBHOOK_SECRET: secret, MADAUTH_ROLE_ARN: '' })).toEqual({ secret });
+    expect(callerFromEnv({})).toEqual({ secret: '' });
+    expect(callerFromEnv({ MADAUTH_ROLE_ARN: MADAUTH_ROLE, WEBHOOK_SECRET: secret })).toEqual({ problem: expect.stringContaining('Remove WEBHOOK_SECRET') });
   });
 });

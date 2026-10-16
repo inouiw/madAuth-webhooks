@@ -35,7 +35,7 @@ Use the `WEBHOOK_SECRET` from your server's `.env`. Sign up in your app, and the
 
 A receiver is a small HTTP endpoint. The ones here follow the same rules, and yours should too:
 
-1. **Verify the signature first, on the raw body.** Calls are signed in the [Standard Webhooks](https://www.standardwebhooks.com/) format. In JavaScript, `verifyWebhook` from `@madauth/server/webhook` does it; other languages can use a Standard Webhooks library. Answer `401` to anything else.
+1. **Verify the signature first, on the raw body.** Calls are signed in the [Standard Webhooks](https://www.standardwebhooks.com/) format. In JavaScript, `verifyWebhook` from `@madauth/server/webhook` does it; other languages can use a Standard Webhooks library. Answer `401` to anything else. On AWS, a Lambda function can let IAM check the calls instead, and then checks that the caller is madAuth's role (`WEBHOOK_AUTH=aws-iam`, see [the aws-ses-mailer](aws-ses-mailer#aws-iam-instead-of-the-secret)).
 2. **Answer 2xx to an e-mail or SMS only once it is on its way**, e.g. after your mail or SMS service accepted it. madAuth waits for the answer and tells the user if it could not be sent.
 3. **Answer within 10 seconds** (5 seconds for events such as `user.signed_up`). madAuth does not retry.
 4. **Answer `204` to types you don't handle.** madAuth only sends the types listed in its `WEBHOOK_EVENTS`, so list what your receiver handles there.
