@@ -2,7 +2,7 @@
 
 A madAuth [webhook](https://github.com/inouiw/madAuth/blob/main/docs/server.md#webhooks) receiver on AWS Lambda that sends the confirmation, password-reset and sign-in e-mails with [Amazon SES](https://aws.amazon.com/ses/), and, if you turn it on, the SMS codes with [Amazon SNS](https://aws.amazon.com/sns/). It:
 
-- checks that each call is signed with your `WEBHOOK_SECRET`
+- checks that each call is signed with your `WEBHOOK_SECRET`, or, when the madAuth server runs on AWS too, that it comes from the server's role (see [AWS IAM instead of the secret](#aws-iam-instead-of-the-secret))
 - renders the e-mail or the SMS ([`src/templates.ts`](src/templates.ts)) with the link and the 6-digit code
 - answers `200` only after SES or SNS has accepted the message. Otherwise it answers `502`, and madAuth tells the user that it can't be sent right now.
 
@@ -30,7 +30,7 @@ New SES accounts are in a sandbox: they can only send to addresses you verified 
 
 ## 3. Create the webhook secret
 
-madAuth and this function share one secret. Create it once:
+madAuth and this function share one secret. Create it once (not when the madAuth server runs on AWS with `WEBHOOK_AUTH=aws-iam`: see [AWS IAM instead of the secret](#aws-iam-instead-of-the-secret)):
 
 ```bash
 npx @madauth/server generate-webhook-secret
@@ -65,13 +65,14 @@ The guided deploy asks for:
 | Stack name | `madauth-mailer` |
 | AWS region | the SES region from step 1 |
 | `WebhookSecret` | the secret from step 3 |
+| `MadauthRoleArn` | leave empty, or see [AWS IAM instead of the secret](#aws-iam-instead-of-the-secret) |
 | `MailFrom` | `"Example" <no-reply@example.com>` |
 | `SendingDomain` | `example.com` (the identity from step 1) |
 | `ConfigurationSet` | leave empty, or see "Bounces and complaints" below |
 | `SendSms` | `false`, or `true` to send madAuth's SMS codes: see "SMS codes" below |
 | `SmsSenderId` | leave empty, or a sender name of 3 to 11 letters and digits, where carriers show one |
 
-Confirm "MailerFunction Function Url has no authentication" with `y`: the function checks every call's signature itself. At the end, SAM prints the output **WebhookUrl**, e.g. `https://abc123.lambda-url.eu-central-1.on.aws/`.
+The function's URL is public: the function checks every call's signature itself. At the end, SAM prints the output **WebhookUrl**, e.g. `https://abc123.lambda-url.eu-central-1.on.aws/`.
 
 If `sam build` fails with `Unknown cli flag: --unsafe-perm`, your SAM CLI is older than your npm. Update the SAM CLI.
 
@@ -94,10 +95,22 @@ WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_sign
 Sign up in your app with an address you can read (in the sandbox, a verified one). The confirmation e-mail should arrive within seconds.
 
 If it doesn't, check these in order:
-- **The madAuth server's log:** `[madauth] Webhook "email.send_verification" … failed: HTTP 401` means the two secrets differ. `HTTP 502` means SES refused the e-mail.
+- **The madAuth server's log:** `[madauth] Webhook "email.send_verification" … failed: HTTP 401` means the two secrets differ (with AWS IAM, see [below](#aws-iam-instead-of-the-secret)). `HTTP 502` means SES refused the e-mail.
 - **The function's log** in CloudWatch (Lambda console → the function → **Monitor** → **View CloudWatch logs**), which contains SES's reason, e.g. `MessageRejected: Email address is not verified` while in the sandbox.
 - **`AccessDenied` for a resource `identity/<the recipient's address>`** in the function's log: in the sandbox, SES also checks the policy against the recipient's verified identity, and the function may only use your sending domain. It goes away with production access (step 2).
 - **Your spam folder.** If the e-mail lands there, check that DKIM and DMARC are set up (step 1).
+
+## AWS IAM instead of the secret
+
+When the madAuth server runs on AWS too, in the same account (e.g. with [madAuth's AWS template](https://github.com/inouiw/madAuth/tree/main/deploy/aws)), IAM can replace the shared secret: madAuth signs every call with its role (`WEBHOOK_AUTH=aws-iam`), and this function's URL has `AWS_IAM` auth, so AWS refuses calls that aren't signed by a principal allowed to invoke it before the function runs. The function then accepts only calls of madAuth's role, whose ARN it gets as `MADAUTH_ROLE_ARN`; others of the account who may invoke it, e.g. admins, are refused with `403`. Nobody has a secret that could make it send e-mails or SMS as if madAuth called. It needs a madAuth server newer than 0.6.0-beta.2.
+
+1. Get the ARN of the madAuth server's role: with the AWS template, its output `RoleArn`, e.g. `arn:aws:iam::123456789012:role/MadAuth-MadAuthFunctionServiceRole-AbC123`.
+2. Deploy this function with that ARN as `MadauthRoleArn` and an empty `WebhookSecret` (`sam deploy --guided`, or `sam deploy --parameter-overrides MadauthRoleArn=<the ARN> WebhookSecret=''`). The template refuses both at once. Note the outputs **WebhookUrl** and **FunctionArn**.
+3. Let madAuth's role invoke the URL, and set madAuth's `WEBHOOK_URL` to it, `WEBHOOK_AUTH=aws-iam`, and no `WEBHOOK_SECRET`. With madAuth's AWS template, set `webhookUrl` and `webhookFunctionArn` (the output **FunctionArn**) and deploy it. Otherwise the role's policy needs `lambda:InvokeFunctionUrl` (with the condition `lambda:FunctionUrlAuthType` = `AWS_IAM`) and `lambda:InvokeFunction` (with `lambda:InvokedViaFunctionUrl` = `true`) on the function: see [AWS IAM](https://github.com/inouiw/madAuth/blob/main/docs/server.md#aws-iam) in the madAuth docs.
+
+**Moving from the secret:** from the moment one of madAuth and this function has switched until the other has, the calls fail: no e-mail is sent, and users see that it failed. So deploy the two right after each other, in the order of [Switching the webhook receiver to AWS IAM](https://github.com/inouiw/madAuth/blob/main/deploy/aws/README.md#switching-the-webhook-receiver-to-aws-iam).
+
+In madAuth's log, `HTTP 403` means the call was refused: by AWS, when madAuth's role may not invoke the URL or madAuth doesn't sign its calls (`WEBHOOK_AUTH=aws-iam`), or by this function, when `MadauthRoleArn` isn't madAuth's role (its log then says "only madAuth's role"). `HTTP 401` means the URL has no `AWS_IAM` auth, and `HTTP 500` that `MADAUTH_ROLE_ARN` is no role's ARN, or that `WEBHOOK_SECRET` is set as well (this function's log says which).
 
 ## SMS codes
 

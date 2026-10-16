@@ -6,7 +6,15 @@ Parameters:
   WebhookSecret:
     Type: String
     NoEcho: true
-    Description: The same WEBHOOK_SECRET as the madAuth server (npx @madauth/server generate-webhook-secret).
+    Default: ''
+    Description: The same WEBHOOK_SECRET as the madAuth server (npx @madauth/server generate-webhook-secret). Empty with MadauthRoleArn.
+  MadauthRoleArn:
+    Type: String
+    Default: ''
+    # As the function checks it: IAM's characters in the path and the name.
+    AllowedPattern: '^(arn:[\w-]+:iam::\d{12}:role/([\w+=,.@-]+/)*[\w+=,.@-]+)?$'
+    ConstraintDescription: a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, or empty.
+    Description: Instead of WebhookSecret, for a madAuth server on AWS with WEBHOOK_AUTH=aws-iam in this account, the ARN of its role. The URL then has AWS_IAM auth and only this role's calls are accepted.
   MailFrom:
     Type: String
     Description: Sender, e.g. "Example" <no-reply@example.com>. Its domain must be verified in SES.
@@ -32,6 +40,16 @@ Parameters:
 Conditions:
   HasConfigurationSet: !Not [!Equals [!Ref ConfigurationSet, '']]
   SendsSms: !Equals [!Ref SendSms, 'true']
+  ChecksRole: !Not [!Equals [!Ref MadauthRoleArn, '']]
+  ChecksSecret: !Not [!Condition ChecksRole]
+
+Rules:
+  OneCaller:
+    Assertions:
+      - Assert: !Not [!And [!Equals [!Ref WebhookSecret, ''], !Equals [!Ref MadauthRoleArn, '']]]
+        AssertDescription: Set WebhookSecret, or MadauthRoleArn for a madAuth server with WEBHOOK_AUTH=aws-iam.
+      - Assert: !Or [!Equals [!Ref WebhookSecret, ''], !Equals [!Ref MadauthRoleArn, '']]
+        AssertDescription: Set WebhookSecret or MadauthRoleArn, not both. With MadauthRoleArn, AWS checks the caller and no secret is used.
 
 Resources:
   MailerFunction:
@@ -46,13 +64,11 @@ Resources:
       Environment:
         Variables:
           WEBHOOK_SECRET: !Ref WebhookSecret
+          MADAUTH_ROLE_ARN: !Ref MadauthRoleArn
           MAIL_FROM: !Ref MailFrom
           SES_CONFIGURATION_SET: !Ref ConfigurationSet
           SEND_SMS: !Ref SendSms
           SMS_SENDER_ID: !Ref SmsSenderId
-      # Public URL without AWS authentication: every call is checked against WEBHOOK_SECRET instead.
-      FunctionUrlConfig:
-        AuthType: NONE
       Policies:
         - Statement:
             - Effect: Allow
@@ -89,7 +105,44 @@ Resources:
         External: ['@aws-sdk/*']
         Banner: ['js=import { createRequire } from "module"; const require = createRequire(import.meta.url);']
 
+  # The URL madAuth calls. With MadauthRoleArn it has AWS_IAM auth: AWS refuses a call that isn't signed by a principal
+  # allowed to invoke it before the function runs (madAuth's role gets that permission from its own policy, e.g. from
+  # webhookFunctionArn of madAuth's AWS template), and the function accepts only that role. Without, it is public, and
+  # the function checks every call against WebhookSecret.
+  MailerFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !Ref MailerFunction
+      AuthType: !If [ChecksRole, AWS_IAM, NONE]
+
+  # A public URL needs both: Lambda checks lambda:InvokeFunctionUrl and lambda:InvokeFunction.
+  MailerFunctionUrlPublicPermissions:
+    Type: AWS::Lambda::Permission
+    Condition: ChecksSecret
+    Properties:
+      FunctionName: !Ref MailerFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  MailerFunctionUrlPublicInvokePermissions:
+    Type: AWS::Lambda::Permission
+    Condition: ChecksSecret
+    Metadata:
+      # InvokedViaFunctionUrl (2025) is newer than the schema of the cfn-lint in some SAM CLIs.
+      cfn-lint:
+        config:
+          ignore_checks: [E3002]
+    Properties:
+      FunctionName: !Ref MailerFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
 Outputs:
   WebhookUrl:
     Description: Set this as WEBHOOK_URL on the madAuth server.
     Value: !GetAtt MailerFunctionUrl.FunctionUrl
+  FunctionArn:
+    Description: With MadauthRoleArn, set this as webhookFunctionArn of madAuth's AWS template, so that madAuth's role may call the URL.
+    Value: !GetAtt MailerFunction.Arn

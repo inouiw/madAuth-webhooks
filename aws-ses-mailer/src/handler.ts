@@ -1,15 +1,24 @@
 // A madAuth webhook receiver on AWS Lambda (Function URL): sends madAuth's e-mails with Amazon SES and its
 // SMS codes with Amazon SNS. It answers 200 only after SES or SNS has accepted a message, so madAuth knows
-// whether it went out.
+// whether it went out. It takes calls signed with WEBHOOK_SECRET or, behind a Function URL with AWS_IAM auth, only
+// those of madAuth's role (MADAUTH_ROLE_ARN).
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { verifyWebhook } from '@madauth/server/webhook';
-import type { LambdaFunctionURLEvent, LambdaFunctionURLResult } from 'aws-lambda';
+import type { LambdaFunctionURLEvent, LambdaFunctionURLEventWithIAMAuthorizer, LambdaFunctionURLResult } from 'aws-lambda';
 import { alreadyRegisteredMail, noPasswordMail, resetPasswordMail, signInMail, smsText, type Mail, verifyEmailMail } from './templates.js';
 
-export interface MailerOptions {
+/**
+ * Who may call: whoever signs the calls with the secret, or, behind a Function URL with AWS_IAM auth, madAuth's role
+ * only. AWS checks the role's signature before this function runs, so no secret is needed.
+ */
+export type Caller =
   /** The same WEBHOOK_SECRET madAuth uses. */
-  secret: string;
+  | { secret: string }
+  /** The ARN of the role madAuth signs its calls with (WEBHOOK_AUTH=aws-iam), e.g. `arn:aws:iam::123456789012:role/madauth-server`. */
+  | { madauthRoleArn: string };
+
+export type MailerOptions = Caller & {
   /** Sender, e.g. `"Example" <no-reply@example.com>`; its domain must be verified in SES. */
   from: string;
   /** Optional SES configuration set, e.g. to record bounces and complaints. */
@@ -19,6 +28,66 @@ export interface MailerOptions {
   sns?: Pick<SNSClient, 'send'>;
   /** Optional sender name shown instead of a number, where carriers support it (SNS `AWS.SNS.SMS.SenderID`). */
   smsSenderId?: string;
+};
+
+/** A role's partition, account and name. An assumed role's ARN has no path, so a role is known by these. */
+interface Role {
+  partition: string;
+  account: string;
+  name: string;
+}
+
+// IAM's characters of role names and path segments.
+const NAME = String.raw`[\w+=,.@-]+`;
+const ROLE_ARN = new RegExp(String.raw`^arn:([\w-]+):iam::(\d{12}):role/(?:${NAME}/)*(${NAME})$`);
+const ASSUMED_ROLE_ARN = new RegExp(String.raw`^arn:([\w-]+):sts::(\d{12}):assumed-role/(${NAME})/[^/]+$`);
+
+/** The role of an ARN that matches `pattern` (partition, account and name in that order), or null. */
+function roleOf(pattern: RegExp, arn: string): Role | null {
+  const match = pattern.exec(arn);
+  return match ? { partition: match[1]!, account: match[2]!, name: match[3]! } : null;
+}
+
+// Role names are unique regardless of case, so a role named with other cases is still the same role.
+const sameRole = (a: Role, b: Role): boolean => a.partition === b.partition && a.account === b.account && a.name.toLowerCase() === b.name.toLowerCase();
+
+/** How a call is checked, made once from the options: a malformed MADAUTH_ROLE_ARN refuses every call with 500. */
+type Gate = { secret: string } | { role: Role; arn: string } | { problem: string };
+
+function gateOf(caller: Caller): Gate {
+  if (!('madauthRoleArn' in caller)) return { secret: caller.secret };
+  const role = roleOf(ROLE_ARN, caller.madauthRoleArn);
+  return role
+    ? { role, arn: caller.madauthRoleArn }
+    : { problem: `MADAUTH_ROLE_ARN must be a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, but is "${caller.madauthRoleArn}".` };
+}
+
+type IamRequestContext = Partial<Pick<LambdaFunctionURLEventWithIAMAuthorizer['requestContext'], 'authorizer'>>;
+
+/** The caller AWS checked at a Function URL with AWS_IAM auth (`requestContext.authorizer.iam`); undefined without one. */
+function iamCallerOf(event: LambdaFunctionURLEvent): { userArn: string } | undefined {
+  const iam = (event.requestContext as IamRequestContext | undefined)?.authorizer?.iam;
+  return iam ? { userArn: typeof iam.userArn === 'string' ? iam.userArn : '' } : undefined;
+}
+
+/** Whether a call is madAuth's; if not, the answer and what the log says. */
+function checkCaller(gate: Gate, event: LambdaFunctionURLEvent, body: string): { ok: true } | { ok: false; statusCode: 401 | 403 | 500; log: string } {
+  if ('problem' in gate) return { ok: false, statusCode: 500, log: gate.problem };
+  if ('role' in gate) {
+    const iam = iamCallerOf(event);
+    if (!iam) {
+      return { ok: false, statusCode: 401, log: 'Rejected a call without AWS IAM authentication: with MADAUTH_ROLE_ARN, the Function URL must have AWS_IAM auth.' };
+    }
+    const caller = roleOf(ASSUMED_ROLE_ARN, iam.userArn);
+    if (!caller || !sameRole(caller, gate.role)) {
+      return { ok: false, statusCode: 403, log: `Rejected a call of ${iam.userArn || 'an unknown caller'}: only madAuth's role ${gate.arn} (MADAUTH_ROLE_ARN) may call.` };
+    }
+    return { ok: true };
+  }
+  if (!verifyWebhook(gate.secret, event.headers, body)) {
+    return { ok: false, statusCode: 401, log: 'Rejected a call with a wrong signature. Do madAuth and this function use the same WEBHOOK_SECRET?' };
+  }
+  return { ok: true };
 }
 
 interface Call {
@@ -67,12 +136,14 @@ function mailFor({ type, data }: Call): Mail | null {
 }
 
 export function createMailer(options: MailerOptions) {
+  const gate = gateOf(options);
   return async (event: LambdaFunctionURLEvent): Promise<LambdaFunctionURLResult> => {
     // Verify the raw body exactly as it arrived: re-serialized JSON would not match the signature.
     const body = event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : (event.body ?? '');
-    if (!verifyWebhook(options.secret, event.headers, body)) {
-      console.warn('Rejected a call with a wrong signature. Do madAuth and this function use the same WEBHOOK_SECRET?');
-      return { statusCode: 401 };
+    const check = checkCaller(gate, event, body);
+    if (!check.ok) {
+      (check.statusCode === 500 ? console.error : console.warn)(check.log);
+      return { statusCode: check.statusCode };
     }
     let call: Call | null;
     try {
@@ -153,11 +224,29 @@ async function sendSms(options: MailerOptions, data: Record<string, any>): Promi
   return { statusCode: 200 };
 }
 
-export const handler = createMailer({
-  secret: process.env.WEBHOOK_SECRET ?? '',
-  from: process.env.MAIL_FROM ?? '',
-  configurationSet: process.env.SES_CONFIGURATION_SET || undefined,
-  ses: new SESv2Client({}),
-  sns: process.env.SEND_SMS === 'true' ? new SNSClient({}) : undefined,
-  smsSenderId: process.env.SMS_SENDER_ID || undefined,
-});
+/** Who may call, from MADAUTH_ROLE_ARN or WEBHOOK_SECRET. Both at once is refused: the secret would only be in the way. */
+export function callerFromEnv(env: Record<string, string | undefined>): Caller | { problem: string } {
+  const roleArn = env.MADAUTH_ROLE_ARN?.trim();
+  const secret = env.WEBHOOK_SECRET?.trim();
+  if (roleArn && secret) {
+    return { problem: 'Both MADAUTH_ROLE_ARN and WEBHOOK_SECRET are set: with MADAUTH_ROLE_ARN, AWS checks the caller and no secret is used. Remove WEBHOOK_SECRET.' };
+  }
+  return roleArn ? { madauthRoleArn: roleArn } : { secret: secret ?? '' };
+}
+
+const caller = callerFromEnv(process.env);
+
+export const handler =
+  'problem' in caller
+    ? async (): Promise<LambdaFunctionURLResult> => {
+        console.error(caller.problem);
+        return { statusCode: 500 };
+      }
+    : createMailer({
+        ...caller,
+        from: process.env.MAIL_FROM ?? '',
+        configurationSet: process.env.SES_CONFIGURATION_SET || undefined,
+        ses: new SESv2Client({}),
+        sns: process.env.SEND_SMS === 'true' ? new SNSClient({}) : undefined,
+        smsSenderId: process.env.SMS_SENDER_ID || undefined,
+      });
