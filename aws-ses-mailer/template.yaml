@@ -11,7 +11,8 @@ Parameters:
   MadauthRoleArn:
     Type: String
     Default: ''
-    AllowedPattern: '^(arn:[\w-]+:iam::\d{12}:role/.+)?$'
+    # As the function checks it: IAM's characters in the path and the name.
+    AllowedPattern: '^(arn:[\w-]+:iam::\d{12}:role/([\w+=,.@-]+/)*[\w+=,.@-]+)?$'
     ConstraintDescription: a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, or empty.
     Description: Instead of WebhookSecret, for a madAuth server on AWS with WEBHOOK_AUTH=aws-iam in this account, the ARN of its role. The URL then has AWS_IAM auth and only this role's calls are accepted.
   MailFrom:
@@ -40,7 +41,7 @@ Conditions:
   HasConfigurationSet: !Not [!Equals [!Ref ConfigurationSet, '']]
   SendsSms: !Equals [!Ref SendSms, 'true']
   ChecksRole: !Not [!Equals [!Ref MadauthRoleArn, '']]
-  ChecksSecret: !Equals [!Ref MadauthRoleArn, '']
+  ChecksSecret: !Not [!Condition ChecksRole]
 
 Rules:
   OneCaller:

@@ -5,7 +5,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { verifyWebhook } from '@madauth/server/webhook';
-import type { LambdaFunctionURLEvent, LambdaFunctionURLResult } from 'aws-lambda';
+import type { LambdaFunctionURLEvent, LambdaFunctionURLEventWithIAMAuthorizer, LambdaFunctionURLResult } from 'aws-lambda';
 import { alreadyRegisteredMail, noPasswordMail, resetPasswordMail, signInMail, smsText, type Mail, verifyEmailMail } from './templates.js';
 
 /**
@@ -37,44 +37,54 @@ interface Role {
   name: string;
 }
 
-/** The role of `arn:<partition>:iam::<account>:role/<path/><name>`, or null for another ARN. */
-function roleOf(arn: string): Role | null {
-  const match = /^arn:([\w-]+):iam::(\d{12}):role\/(?:[^/]+\/)*([^/]+)$/.exec(arn);
+// IAM's characters of role names and path segments.
+const NAME = String.raw`[\w+=,.@-]+`;
+const ROLE_ARN = new RegExp(String.raw`^arn:([\w-]+):iam::(\d{12}):role/(?:${NAME}/)*(${NAME})$`);
+const ASSUMED_ROLE_ARN = new RegExp(String.raw`^arn:([\w-]+):sts::(\d{12}):assumed-role/(${NAME})/[^/]+$`);
+
+/** The role of an ARN that matches `pattern` (partition, account and name in that order), or null. */
+function roleOf(pattern: RegExp, arn: string): Role | null {
+  const match = pattern.exec(arn);
   return match ? { partition: match[1]!, account: match[2]!, name: match[3]! } : null;
 }
 
-/** The role a caller assumed, `arn:<partition>:sts::<account>:assumed-role/<name>/<session>`, or null for another caller. */
-function assumedRoleOf(arn: string): Role | null {
-  const match = /^arn:([\w-]+):sts::(\d{12}):assumed-role\/([^/]+)\/[^/]+$/.exec(arn);
-  return match ? { partition: match[1]!, account: match[2]!, name: match[3]! } : null;
+// Role names are unique regardless of case, so a role named with other cases is still the same role.
+const sameRole = (a: Role, b: Role): boolean => a.partition === b.partition && a.account === b.account && a.name.toLowerCase() === b.name.toLowerCase();
+
+/** How a call is checked, made once from the options: a malformed MADAUTH_ROLE_ARN refuses every call with 500. */
+type Gate = { secret: string } | { role: Role; arn: string } | { problem: string };
+
+function gateOf(caller: Caller): Gate {
+  if (!('madauthRoleArn' in caller)) return { secret: caller.secret };
+  const role = roleOf(ROLE_ARN, caller.madauthRoleArn);
+  return role
+    ? { role, arn: caller.madauthRoleArn }
+    : { problem: `MADAUTH_ROLE_ARN must be a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, but is "${caller.madauthRoleArn}".` };
 }
 
-const sameRole = (a: Role, b: Role): boolean => a.partition === b.partition && a.account === b.account && a.name === b.name;
+type IamRequestContext = Partial<Pick<LambdaFunctionURLEventWithIAMAuthorizer['requestContext'], 'authorizer'>>;
 
 /** The caller AWS checked at a Function URL with AWS_IAM auth (`requestContext.authorizer.iam`); undefined without one. */
 function iamCallerOf(event: LambdaFunctionURLEvent): { userArn: string } | undefined {
-  const iam = (event.requestContext as { authorizer?: { iam?: { userArn?: unknown } } } | undefined)?.authorizer?.iam;
+  const iam = (event.requestContext as IamRequestContext | undefined)?.authorizer?.iam;
   return iam ? { userArn: typeof iam.userArn === 'string' ? iam.userArn : '' } : undefined;
 }
 
 /** Whether a call is madAuth's; if not, the answer and what the log says. */
-function checkCaller(caller: Caller, event: LambdaFunctionURLEvent, body: string): { ok: true } | { ok: false; statusCode: 401 | 403; log: string } {
-  if ('madauthRoleArn' in caller) {
+function checkCaller(gate: Gate, event: LambdaFunctionURLEvent, body: string): { ok: true } | { ok: false; statusCode: 401 | 403 | 500; log: string } {
+  if ('problem' in gate) return { ok: false, statusCode: 500, log: gate.problem };
+  if ('role' in gate) {
     const iam = iamCallerOf(event);
     if (!iam) {
       return { ok: false, statusCode: 401, log: 'Rejected a call without AWS IAM authentication: with MADAUTH_ROLE_ARN, the Function URL must have AWS_IAM auth.' };
     }
-    const expected = roleOf(caller.madauthRoleArn);
-    if (!expected) {
-      return { ok: false, statusCode: 403, log: `Rejected a call: MADAUTH_ROLE_ARN must be a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, but is "${caller.madauthRoleArn}".` };
-    }
-    const actual = assumedRoleOf(iam.userArn);
-    if (!actual || !sameRole(actual, expected)) {
-      return { ok: false, statusCode: 403, log: `Rejected a call of ${iam.userArn || 'an unknown caller'}: only madAuth's role ${caller.madauthRoleArn} (MADAUTH_ROLE_ARN) may call.` };
+    const caller = roleOf(ASSUMED_ROLE_ARN, iam.userArn);
+    if (!caller || !sameRole(caller, gate.role)) {
+      return { ok: false, statusCode: 403, log: `Rejected a call of ${iam.userArn || 'an unknown caller'}: only madAuth's role ${gate.arn} (MADAUTH_ROLE_ARN) may call.` };
     }
     return { ok: true };
   }
-  if (!verifyWebhook(caller.secret, event.headers, body)) {
+  if (!verifyWebhook(gate.secret, event.headers, body)) {
     return { ok: false, statusCode: 401, log: 'Rejected a call with a wrong signature. Do madAuth and this function use the same WEBHOOK_SECRET?' };
   }
   return { ok: true };
@@ -126,12 +136,13 @@ function mailFor({ type, data }: Call): Mail | null {
 }
 
 export function createMailer(options: MailerOptions) {
+  const gate = gateOf(options);
   return async (event: LambdaFunctionURLEvent): Promise<LambdaFunctionURLResult> => {
     // Verify the raw body exactly as it arrived: re-serialized JSON would not match the signature.
     const body = event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : (event.body ?? '');
-    const check = checkCaller(options, event, body);
+    const check = checkCaller(gate, event, body);
     if (!check.ok) {
-      console.warn(check.log);
+      (check.statusCode === 500 ? console.error : console.warn)(check.log);
       return { statusCode: check.statusCode };
     }
     let call: Call | null;

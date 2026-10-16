@@ -110,7 +110,7 @@ When the madAuth server runs on AWS too, in the same account (e.g. with [madAuth
 
 **Moving from the secret:** from the moment one of madAuth and this function has switched until the other has, the calls fail: no e-mail is sent, and users see that it failed. So deploy the two right after each other, in the order of [Switching the webhook receiver to AWS IAM](https://github.com/inouiw/madAuth/blob/main/deploy/aws/README.md#switching-the-webhook-receiver-to-aws-iam).
 
-In madAuth's log, `HTTP 403` means the call was refused: by AWS, when madAuth's role may not invoke the URL or madAuth doesn't sign its calls (`WEBHOOK_AUTH=aws-iam`), or by this function, when `MadauthRoleArn` isn't madAuth's role (its log then says "only madAuth's role"). `HTTP 401` means the URL has no `AWS_IAM` auth.
+In madAuth's log, `HTTP 403` means the call was refused: by AWS, when madAuth's role may not invoke the URL or madAuth doesn't sign its calls (`WEBHOOK_AUTH=aws-iam`), or by this function, when `MadauthRoleArn` isn't madAuth's role (its log then says "only madAuth's role"). `HTTP 401` means the URL has no `AWS_IAM` auth, and `HTTP 500` that `MADAUTH_ROLE_ARN` is no role's ARN, or that `WEBHOOK_SECRET` is set as well (this function's log says which).
 
 ## SMS codes
 

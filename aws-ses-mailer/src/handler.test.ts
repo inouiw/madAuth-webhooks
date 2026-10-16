@@ -354,6 +354,7 @@ describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
     const send = vi.fn(async () => ({ MessageId: 'm1' }));
     const handler = createMailer({ madauthRoleArn, from: '"Example" <no-reply@example.com>', ses: { send } as never });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     return { handler, send };
   }
 
@@ -365,6 +366,9 @@ describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
     // The role's path isn't in the caller's ARN: a role with one is known by its account and name too.
     const withPath = setupIam('arn:aws:iam::123456789012:role/service-role/MadAuthSite-MadAuthFunctionServiceRole-AbC123');
     expect(await withPath.handler(iamEvent('email.send_password_reset', reset, MADAUTH_CALLER))).toEqual({ statusCode: 200 });
+    // IAM tells roles apart regardless of case, so the role named with other cases is the same one.
+    const otherCase = setupIam('arn:aws:iam::123456789012:role/madauthsite-madauthfunctionservicerole-abc123');
+    expect(await otherCase.handler(iamEvent('email.send_password_reset', reset, MADAUTH_CALLER))).toEqual({ statusCode: 200 });
   });
 
   it('refuses a call without AWS IAM authentication, also one signed with a secret: the Function URL has NONE auth', async () => {
@@ -396,12 +400,14 @@ describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rejected a call of arn:aws:sts::123456789012:assumed-role/Admin/ada: only madAuth's role"));
   });
 
-  it('refuses every call when MADAUTH_ROLE_ARN is no role ARN', async () => {
-    const { handler, send } = setupIam('arn:aws:iam::123456789012:user/madauth');
+  it('refuses every call with 500 when MADAUTH_ROLE_ARN is no role ARN: a mistake of the setup, not of the caller', async () => {
+    for (const arn of ['arn:aws:iam::123456789012:user/madauth', 'arn:aws:iam::123456789012:role/madauth/', 'arn:aws:iam::123456789012:role//madauth', 'madauth']) {
+      const { handler, send } = setupIam(arn);
 
-    expect(await handler(iamEvent('email.send_password_reset', reset, 'arn:aws:sts::123456789012:assumed-role/madauth/x'))).toEqual({ statusCode: 403 });
-    expect(send).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("MADAUTH_ROLE_ARN must be a role's ARN"));
+      expect(await handler(iamEvent('email.send_password_reset', reset, 'arn:aws:sts::123456789012:assumed-role/madauth/x'))).toEqual({ statusCode: 500 });
+      expect(send).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining("MADAUTH_ROLE_ARN must be a role's ARN"));
+    }
   });
 
   it('takes the caller from MADAUTH_ROLE_ARN or WEBHOOK_SECRET, and refuses both', () => {
