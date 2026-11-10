@@ -117,6 +117,10 @@ export function createReceiver(options: ReceiverOptions) {
         .filter(([key, value]) => key !== 'user' && value != null && typeof value !== 'object')
         .map(([key, value]) => (key === 'method' || key === 'via' ? String(value) : `${key}: ${value}`)),
       ...sessionDetails(data.session),
+      // The other objects madAuth names by their id and name, e.g. `byApiKey: CI (key_1)`, `passkey: Laptop (acc_1)`.
+      ...Object.entries(data)
+        .filter(([key, value]) => key !== 'user' && key !== 'session' && isNamed(value))
+        .map(([key, value]) => `${key}: ${(value as { name: string; id: string }).name} (${(value as { id: string }).id})`),
     ];
     log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${details.length ? ` (${details.join(', ')})` : ''}`);
     return reply(204);
@@ -136,4 +140,9 @@ function sessionDetails(session: unknown): string[] {
     ...(typeof id === 'string' ? [`session: ${id}`] : []),
     ...(hasDevice ? [`from ${device || 'an unknown device'}${typeof ip === 'string' && ip ? `, ${ip}` : ''}`] : []),
   ];
+}
+
+/** An object with a string `id` and `name`, as madAuth sends an API key, a passkey or the API key of an admin. */
+function isNamed(value: unknown): boolean {
+  return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' && typeof (value as { name?: unknown }).name === 'string';
 }
