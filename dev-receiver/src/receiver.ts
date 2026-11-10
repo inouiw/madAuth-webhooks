@@ -112,10 +112,28 @@ export function createReceiver(options: ReceiverOptions) {
       return reply(204);
     }
     // What else the event says: how they signed in (`password`), and the other fields as `phone: +41…`, `by: admin@…`.
-    const details = Object.entries(data)
-      .filter(([key, value]) => key !== 'user' && value != null && typeof value !== 'object')
-      .map(([key, value]) => (key === 'method' || key === 'via' ? String(value) : `${key}: ${value}`));
+    const details = [
+      ...Object.entries(data)
+        .filter(([key, value]) => key !== 'user' && value != null && typeof value !== 'object')
+        .map(([key, value]) => (key === 'method' || key === 'via' ? String(value) : `${key}: ${value}`)),
+      ...sessionDetails(data.session),
+    ];
     log(`[webhook] ${type}: ${data.user?.email ?? data.user?.id ?? ''}${details.length ? ` (${details.join(', ')})` : ''}`);
     return reply(204);
   };
+}
+
+/**
+ * The session of `user.signed_in` (its id and device, madAuth 0.7.5) and `user.session_ended` (its id), e.g.
+ * `session: ses_…, from Firefox on macOS, 203.0.113.7`.
+ */
+function sessionDetails(session: unknown): string[] {
+  if (!session || typeof session !== 'object') return [];
+  const { id, browser, os, ip } = session as { id?: unknown; browser?: unknown; os?: unknown; ip?: unknown };
+  const device = [browser, os].filter((part) => typeof part === 'string' && part).join(' on ');
+  const hasDevice = 'browser' in session || 'os' in session || 'ip' in session;
+  return [
+    ...(typeof id === 'string' ? [`session: ${id}`] : []),
+    ...(hasDevice ? [`from ${device || 'an unknown device'}${typeof ip === 'string' && ip ? `, ${ip}` : ''}`] : []),
+  ];
 }
