@@ -25,17 +25,22 @@ git clone https://github.com/inouiw/madAuth-webhooks.git
 cd madAuth-webhooks/dev-receiver && npm install
 ```
 
-Give it the `WEBHOOK_URL` and `WEBHOOK_SECRET` of your madAuth server (they are in the `.env` that `npx @madauth/server init` wrote): copy `.env.example` to `.env` and fill them in. Then start it:
+Give it the `WEBHOOK_URL` of your madAuth server (it is in the `.env` that `npx @madauth/server init` wrote): copy `.env.example` to `.env` and fill it in. Then start it:
 
 ```bash
 npm run dev
 ```
 
-It listens on the port of `WEBHOOK_URL`, by default `http://localhost:8790/webhook`. You can also pass the two values in the environment instead of `.env`:
+It listens on the port of `WEBHOOK_URL`, by default `http://localhost:8790/webhook`. You can also pass the values in the environment instead of `.env`:
 
 ```bash
-WEBHOOK_URL=http://localhost:8790/webhook WEBHOOK_SECRET=whsec_... npm run dev
+WEBHOOK_URL=http://localhost:8790/webhook npm run dev
 ```
+
+It checks each call's signature:
+
+- **`v1a`**, madAuth's webhook key (madAuth 0.7.5 or newer; `init` sets one up): with the public keys from `WEBHOOK_KEYS_URL`, by default `http://localhost:8787/.well-known/webhook-keys.json`, madAuth's default port. Set it when the server runs elsewhere, e.g. `WEBHOOK_KEYS_URL=http://localhost:3000/.well-known/webhook-keys.json` through your app's proxy. No secret is shared.
+- **`v1`**, the shared secret: set `WEBHOOK_SECRET` to the server's, for a server that has one (e.g. from before 0.7.5). With both, either signature is accepted. `WEBHOOK_KEYS_URL=` (empty) checks `v1` alone.
 
 The madAuth server only sends the types listed in its `WEBHOOK_EVENTS`. To see everything here, list them all on the server:
 
@@ -57,10 +62,11 @@ ALLOWED_EMAIL_DOMAINS=example.com npm run dev
 
 ## If nothing appears
 
-- **`Rejected a call with a wrong signature`**: the server and the receiver have different `WEBHOOK_SECRET` values.
+- **`Rejected a call with a wrong signature`**: `WEBHOOK_KEYS_URL` isn't this server's `/.well-known/webhook-keys.json`, or it lists no key (a server without a webhook key signs with `WEBHOOK_SECRET` alone: set the same one here); or the server and the receiver have different `WEBHOOK_SECRET` values.
+- **`Could not fetch the webhook keys`**: the madAuth server isn't reachable at `WEBHOOK_KEYS_URL`.
 - **The madAuth server logs `Webhook "email.send_verification" … failed`** (or `"sms.send_code"`): the receiver is not running, or `WEBHOOK_URL` on the server points elsewhere.
 - **A madAuth server in Docker** reaches a receiver on your machine at `http://host.docker.internal:8790/webhook`.
 
 ## The code
 
-[`src/receiver.ts`](src/receiver.ts) is also a small example of a receiver: it verifies the signature with `verifyWebhook` from `@madauth/server/webhook` on the raw body, then answers each `type`. To send real e-mails and SMS, see the [Amazon SES mailer](../aws-ses-mailer).
+[`src/receiver.ts`](src/receiver.ts) is also a small example of a receiver: it verifies the signature with `verifyWebhook` (and the keys of `webhookKeys`) from `@madauth/server/webhook` on the raw body, then answers each `type`. To send real e-mails and SMS, see the [Amazon SES mailer](../aws-ses-mailer).
