@@ -4,7 +4,7 @@ import { PublishCommand } from '@aws-sdk/client-sns';
 import { describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { generateWebhookSecret, signWebhook } from '@madauth/server/webhook';
-import { callerFromEnv, createMailer } from './handler.js';
+import { callerFromEnv, createMailer, type MailerOptions } from './handler.js';
 
 const secret = generateWebhookSecret();
 // madAuth's webhook key (v1a), and the list it publishes at /.well-known/webhook-keys.json.
@@ -426,21 +426,22 @@ describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
 
   it('takes the caller from MADAUTH_ROLE_ARN, or WEBHOOK_KEYS_URL and WEBHOOK_SECRET, and refuses the role with either', () => {
     expect(callerFromEnv({ MADAUTH_ROLE_ARN: ` ${MADAUTH_ROLE} ` })).toEqual({ madauthRoleArn: MADAUTH_ROLE });
-    expect(callerFromEnv({ WEBHOOK_SECRET: secret, MADAUTH_ROLE_ARN: '' })).toEqual({ secret, webhookKeysUrl: undefined });
+    expect(callerFromEnv({ WEBHOOK_SECRET: secret, MADAUTH_ROLE_ARN: '' })).toEqual({ secret });
     expect(callerFromEnv({ WEBHOOK_KEYS_URL: KEYS_URL, WEBHOOK_SECRET: '' })).toEqual({ webhookKeysUrl: KEYS_URL, secret: undefined });
     expect(callerFromEnv({ WEBHOOK_KEYS_URL: KEYS_URL, WEBHOOK_SECRET: secret })).toEqual({ webhookKeysUrl: KEYS_URL, secret });
-    expect(callerFromEnv({})).toEqual({ webhookKeysUrl: undefined, secret: undefined });
+    expect(callerFromEnv({})).toEqual({ problem: expect.stringContaining('nothing checks the calls') });
     expect(callerFromEnv({ MADAUTH_ROLE_ARN: MADAUTH_ROLE, WEBHOOK_SECRET: secret })).toEqual({ problem: expect.stringContaining('Remove WEBHOOK_SECRET') });
     expect(callerFromEnv({ MADAUTH_ROLE_ARN: MADAUTH_ROLE, WEBHOOK_KEYS_URL: KEYS_URL })).toEqual({ problem: expect.stringContaining('Remove WEBHOOK_KEYS_URL') });
   });
 });
 
 describe("AWS SES mailer with madAuth's webhook key (v1a, WEBHOOK_KEYS_URL)", () => {
-  const mailer = (caller: { webhookKeysUrl?: string; secret?: string }) => {
+  const mailer = (caller: { webhookKeysUrl?: string; secret?: string }, fetchImpl: typeof fetch = keysFetch) => {
     const send = vi.fn(async () => ({ MessageId: 'm1' }));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    return { send, handler: createMailer({ ...caller, from: 'no-reply@example.com', ses: { send } as never, fetch: keysFetch }) };
+    // Cast: a caller with neither field doesn't type-check, and is tested here as from JavaScript.
+    return { send, handler: createMailer({ ...caller, from: 'no-reply@example.com', ses: { send } as never, fetch: fetchImpl } as MailerOptions) };
   };
 
   it('sends what is signed with the webhook key, checked with the published keys alone; no secret', async () => {
@@ -467,5 +468,16 @@ describe("AWS SES mailer with madAuth's webhook key (v1a, WEBHOOK_KEYS_URL)", ()
     const { handler } = mailer({ webhookKeysUrl: 'http://example.com/.well-known/webhook-keys.json' });
     expect(await handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 500 });
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('WEBHOOK_KEYS_URL must be https'));
+    expect(await mailer({ secret: 'not-a-secret' }).handler(event('email.send_password_reset', reset))).toEqual({ statusCode: 500 });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('WEBHOOK_SECRET must start with "whsec_"'));
+  });
+
+  it("answers 503, not 401, while madAuth's keys can't be fetched: the call may be madAuth's", async () => {
+    const down = (async () => new Response(null, { status: 503 })) as typeof fetch;
+    const { handler, send } = mailer({ webhookKeysUrl: KEYS_URL }, down);
+
+    expect(await handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 503 });
+    expect(send).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("madAuth's webhook keys could not be fetched"));
   });
 });

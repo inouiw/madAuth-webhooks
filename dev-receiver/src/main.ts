@@ -2,13 +2,11 @@
 // sending them. Reads WEBHOOK_URL, WEBHOOK_KEYS_URL and WEBHOOK_SECRET from the environment or from .env, and listens
 // on WEBHOOK_URL's port.
 import { createServer } from 'node:http';
-import { webhookKeys } from '@madauth/server/webhook';
+import { WEBHOOK_KEYS_PATH, webhookKeys } from '@madauth/server/webhook';
 import { createReceiver } from './receiver.js';
 
 /** Where a madAuth server on this machine, on its default port, publishes the public keys of its v1a signatures. */
-const DEFAULT_KEYS_URL = 'http://localhost:8787/.well-known/webhook-keys.json';
-/** Hosts the keys may come from over plain http, as webhookKeys allows. */
-const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]', 'host.docker.internal'];
+const DEFAULT_KEYS_URL = `http://localhost:8787${WEBHOOK_KEYS_PATH}`;
 
 const url = process.env.WEBHOOK_URL;
 // Set but empty: no v1a, only WEBHOOK_SECRET (v1).
@@ -46,11 +44,7 @@ if (parsed.protocol !== 'http:') {
   console.error(`WEBHOOK_URL must start with http:// for this receiver: ${url}`);
   process.exit(1);
 }
-const keysLocation = keysUrl && URL.canParse(keysUrl) ? new URL(keysUrl) : undefined;
-if (keysUrl && !(keysLocation?.protocol === 'https:' || (keysLocation?.protocol === 'http:' && LOCAL_HOSTS.includes(keysLocation.hostname)))) {
-  console.error(`WEBHOOK_KEYS_URL must be https, or http on this machine, e.g. ${DEFAULT_KEYS_URL}, but is "${keysUrl}".`);
-  process.exit(1);
-}
+// webhookKeys refuses a URL that is neither https nor on this machine, and says so.
 const keys = keysUrl ? webhookKeys(keysUrl) : undefined;
 const port = Number(parsed.port || 80);
 const allowedDomains = process.env.ALLOWED_EMAIL_DOMAINS?.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
