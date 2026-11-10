@@ -117,6 +117,21 @@ describe('dev webhook receiver', () => {
     expect(output()).toContain('user.recovery_code_used: ada@example.com (remaining: 9)');
   });
 
+  it("prints a session's id and device, and why it ended", async () => {
+    const { send, output } = await start();
+    const user = { id: 'usr_1', email: 'ada@example.com' };
+
+    await send('user.signed_in', { user, method: 'password', session: { id: 'ses_1', browser: 'Firefox', os: 'macOS', ip: '203.0.113.7' } });
+    await send('user.signed_in', { user, method: 'google', session: { id: 'ses_2', browser: null, os: null, ip: null } });
+    await send('user.session_ended', { user, session: { id: 'ses_1' }, reason: 'ended', by: 'grace@example.com' });
+
+    expect(output()).toContain('user.signed_in: ada@example.com (password, session: ses_1, from Firefox on macOS, 203.0.113.7)');
+    expect(output()).toContain('user.signed_in: ada@example.com (google, session: ses_2, from an unknown device)');
+    expect(output()).toContain('user.session_ended: ada@example.com (reason: ended, by: grace@example.com, session: ses_1)');
+    await send('user.session_ended', { user, session: { id: 'ses_2' }, reason: 'ended', by: 'grace@example.com', byApiKey: { id: 'key_1', name: 'CI' } });
+    expect(output()).toContain('user.session_ended: ada@example.com (reason: ended, by: grace@example.com, session: ses_2, byApiKey: CI (key_1))');
+  });
+
   it('prints claim changes with the address, the claims and who set them', async () => {
     const { send, output } = await start();
     const data = { user: { id: 'usr_1', email: 'ada@example.com' }, by: 'grace@example.com' };

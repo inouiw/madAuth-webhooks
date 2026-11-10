@@ -40,8 +40,10 @@ WEBHOOK_URL=http://localhost:8790/webhook WEBHOOK_SECRET=whsec_... npm run dev
 The madAuth server only sends the types listed in its `WEBHOOK_EVENTS`. To see everything here, list them all on the server:
 
 ```
-WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_signin_link,email.send_already_registered,email.send_password_reset_no_password,sms.send_code,user.signing_up,user.signed_up,user.email_verified,user.password_reset,user.signed_in,user.deleted,user.claims_changed,user.second_factor_enabled,user.second_factor_disabled,user.recovery_code_used
+WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_signin_link,email.send_already_registered,email.send_password_reset_no_password,sms.send_code,user.signing_up,user.signed_up,user.email_verified,user.password_reset,user.password_changed,user.signed_in,user.session_ended,user.deleted,user.claims_changed,user.second_factor_enabled,user.second_factor_disabled,user.recovery_code_used,user.method_added,user.method_removed,user.sign_in_reset,user.api_key_created,user.api_key_revoked
 ```
+
+`user.signed_in` shows the new session's id and device (browser, system, IP address) and `user.session_ended` which session ended and why (madAuth 0.7.5). Objects with an id and a name (an API key, a passkey) are printed as `name (id)`.
 
 `email.send_signin_link` switches the passwordless e-mail link on and `sms.send_code` SMS codes as a second factor (madAuth 0.5): their links and codes appear here like the others.
 
