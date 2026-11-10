@@ -2,10 +2,24 @@ import type { LambdaFunctionURLEvent } from 'aws-lambda';
 import { SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { PublishCommand } from '@aws-sdk/client-sns';
 import { describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { generateWebhookSecret, signWebhook } from '@madauth/server/webhook';
 import { callerFromEnv, createMailer } from './handler.js';
 
 const secret = generateWebhookSecret();
+// madAuth's webhook key (v1a), and the list it publishes at /.well-known/webhook-keys.json.
+const webhookKey = generateKeyPairSync('ed25519');
+const KEYS_URL = 'https://example.com/.well-known/webhook-keys.json';
+const keysFetch = (async (url: string) =>
+  url === KEYS_URL ? Response.json({ keys: [{ ...webhookKey.publicKey.export({ format: 'jwk' }), alg: 'Ed25519', use: 'sig', kid: 'k1' }] }) : new Response(null, { status: 404 })) as typeof fetch;
+
+/** A call signed with the webhook key alone (v1a), as a madAuth server without WEBHOOK_SECRET sends it. */
+function v1aEvent(type: string, data: Record<string, unknown>): LambdaFunctionURLEvent {
+  const body = JSON.stringify({ type, data });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = sign(null, Buffer.from(`msg_1.${timestamp}.${body}`), webhookKey.privateKey).toString('base64');
+  return { headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': String(timestamp), 'webhook-signature': `v1a,${signature}` }, body, isBase64Encoded: false } as unknown as LambdaFunctionURLEvent;
+}
 
 function event(type: string, data: Record<string, unknown> | undefined, options: { sign?: boolean; base64?: boolean } = {}): LambdaFunctionURLEvent {
   const body = JSON.stringify({ type, data });
@@ -410,10 +424,48 @@ describe('AWS SES mailer with AWS IAM (MADAUTH_ROLE_ARN)', () => {
     }
   });
 
-  it('takes the caller from MADAUTH_ROLE_ARN or WEBHOOK_SECRET, and refuses both', () => {
+  it('takes the caller from MADAUTH_ROLE_ARN, or WEBHOOK_KEYS_URL and WEBHOOK_SECRET, and refuses the role with either', () => {
     expect(callerFromEnv({ MADAUTH_ROLE_ARN: ` ${MADAUTH_ROLE} ` })).toEqual({ madauthRoleArn: MADAUTH_ROLE });
-    expect(callerFromEnv({ WEBHOOK_SECRET: secret, MADAUTH_ROLE_ARN: '' })).toEqual({ secret });
-    expect(callerFromEnv({})).toEqual({ secret: '' });
+    expect(callerFromEnv({ WEBHOOK_SECRET: secret, MADAUTH_ROLE_ARN: '' })).toEqual({ secret, webhookKeysUrl: undefined });
+    expect(callerFromEnv({ WEBHOOK_KEYS_URL: KEYS_URL, WEBHOOK_SECRET: '' })).toEqual({ webhookKeysUrl: KEYS_URL, secret: undefined });
+    expect(callerFromEnv({ WEBHOOK_KEYS_URL: KEYS_URL, WEBHOOK_SECRET: secret })).toEqual({ webhookKeysUrl: KEYS_URL, secret });
+    expect(callerFromEnv({})).toEqual({ webhookKeysUrl: undefined, secret: undefined });
     expect(callerFromEnv({ MADAUTH_ROLE_ARN: MADAUTH_ROLE, WEBHOOK_SECRET: secret })).toEqual({ problem: expect.stringContaining('Remove WEBHOOK_SECRET') });
+    expect(callerFromEnv({ MADAUTH_ROLE_ARN: MADAUTH_ROLE, WEBHOOK_KEYS_URL: KEYS_URL })).toEqual({ problem: expect.stringContaining('Remove WEBHOOK_KEYS_URL') });
+  });
+});
+
+describe("AWS SES mailer with madAuth's webhook key (v1a, WEBHOOK_KEYS_URL)", () => {
+  const mailer = (caller: { webhookKeysUrl?: string; secret?: string }) => {
+    const send = vi.fn(async () => ({ MessageId: 'm1' }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    return { send, handler: createMailer({ ...caller, from: 'no-reply@example.com', ses: { send } as never, fetch: keysFetch }) };
+  };
+
+  it('sends what is signed with the webhook key, checked with the published keys alone; no secret', async () => {
+    const { handler, send } = mailer({ webhookKeysUrl: KEYS_URL });
+
+    expect(await handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 200 });
+    expect(send).toHaveBeenCalledOnce();
+    // A call signed with a secret alone is not madAuth's here.
+    expect(await handler(event('email.send_password_reset', reset))).toEqual({ statusCode: 401 });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('is WEBHOOK_KEYS_URL the /.well-known/webhook-keys.json'));
+  });
+
+  it('with the secret too, accepts either signature: the way from the secret to the keys', async () => {
+    const { handler, send } = mailer({ webhookKeysUrl: KEYS_URL, secret });
+
+    expect(await handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 200 });
+    expect(await handler(event('email.send_password_reset', reset))).toEqual({ statusCode: 200 });
+    expect(await handler(event('email.send_password_reset', reset, { sign: false }))).toEqual({ statusCode: 401 });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses every call with 500 when nothing checks them, or the key list is not https', async () => {
+    expect(await mailer({}).handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 500 });
+    const { handler } = mailer({ webhookKeysUrl: 'http://example.com/.well-known/webhook-keys.json' });
+    expect(await handler(v1aEvent('email.send_password_reset', reset))).toEqual({ statusCode: 500 });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('WEBHOOK_KEYS_URL must be https'));
   });
 });
