@@ -1,10 +1,17 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { generateWebhookSecret, signWebhook } from '@madauth/server/webhook';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { generateWebhookSecret, signWebhook, webhookKeys } from '@madauth/server/webhook';
 import { createReceiver, type ReceiverOptions } from './receiver.js';
 
 const secret = generateWebhookSecret();
+// madAuth's webhook key (v1a), and the list it publishes at /.well-known/webhook-keys.json.
+const webhookKey = generateKeyPairSync('ed25519');
+const KEYS_URL = 'http://localhost:8787/.well-known/webhook-keys.json';
+const published = { keys: [{ ...webhookKey.publicKey.export({ format: 'jwk' }), alg: 'Ed25519', use: 'sig', kid: 'k1' }] };
+const keys = webhookKeys(KEYS_URL, { fetch: (async () => Response.json(published)) as typeof fetch });
+const signV1a = (id: string, timestamp: number, body: string) => `v1a,${sign(null, Buffer.from(`${id}.${timestamp}.${body}`), webhookKey.privateKey).toString('base64')}`;
 let server: Server | undefined;
 afterEach(() => server?.close());
 
@@ -14,17 +21,20 @@ async function start(options: Partial<ReceiverOptions> = {}) {
   server = createServer(createReceiver({ secret, log: (l) => lines.push(l), ...options }));
   await new Promise<void>((resolve) => server!.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
-  const send = (type: string, data: Record<string, unknown> | undefined, sign = true) => {
+  /** Signed with the secret (v1) unless told otherwise: `v1a` with the webhook key, `both`, or `false` for a forged one. */
+  const send = (type: string, data: Record<string, unknown> | undefined, signed: boolean | 'v1a' | 'both' = true) => {
     const body = JSON.stringify({ type, data });
     const id = 'msg_test';
     const timestamp = Math.floor(Date.now() / 1000);
+    const signature = {
+      v1a: signV1a(id, timestamp, body),
+      both: `${signV1a(id, timestamp, body)} ${signWebhook(secret, id, timestamp, body)}`,
+      true: signWebhook(secret, id, timestamp, body),
+      false: 'v1,forged',
+    }[String(signed) as 'v1a' | 'both' | 'true' | 'false'];
     return fetch(`http://127.0.0.1:${port}/webhook`, {
       method: 'POST',
-      headers: {
-        'webhook-id': id,
-        'webhook-timestamp': String(timestamp),
-        'webhook-signature': sign ? signWebhook(secret, id, timestamp, body) : 'v1,forged',
-      },
+      headers: { 'webhook-id': id, 'webhook-timestamp': String(timestamp), 'webhook-signature': signature },
       body,
     });
   };
@@ -92,6 +102,25 @@ describe('dev webhook receiver', () => {
 
     expect((await send('email.send_verification', { to: 'ada@example.com' }, false)).status).toBe(401);
     expect(output()).toContain('wrong signature');
+  });
+
+  it("accepts calls signed with madAuth's webhook key (v1a), checked with its published keys alone", async () => {
+    const { send, output } = await start({ secret: undefined, keys });
+
+    expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'password' }, 'v1a')).status).toBe(204);
+    expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' }, method: 'password' }, 'both')).status).toBe(204);
+    // Without the secret, a v1 signature alone isn't enough.
+    expect((await send('user.signed_in', { user: { id: 'usr_1' } }, true)).status).toBe(401);
+    expect(output()).toContain('is WEBHOOK_KEYS_URL the /.well-known/webhook-keys.json of this madAuth server');
+  });
+
+  it('with the keys and the secret, accepts v1a, v1 or both: the way from the secret to the keys', async () => {
+    const { send } = await start({ keys });
+
+    for (const signed of ['v1a', true, 'both'] as const) {
+      expect((await send('user.signed_in', { user: { id: 'usr_1', email: 'ada@example.com' } }, signed)).status).toBe(204);
+    }
+    expect((await send('user.signed_in', { user: { id: 'usr_1' } }, false)).status).toBe(401);
   });
 
   it('answers the sign-up check, optionally limited to some domains', async () => {

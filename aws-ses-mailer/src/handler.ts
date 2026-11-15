@@ -1,20 +1,27 @@
 // A madAuth webhook receiver on AWS Lambda (Function URL): sends madAuth's e-mails with Amazon SES and its
 // SMS codes with Amazon SNS. It answers 200 only after SES or SNS has accepted a message, so madAuth knows
-// whether it went out. It takes calls signed with WEBHOOK_SECRET or, behind a Function URL with AWS_IAM auth, only
-// those of madAuth's role (MADAUTH_ROLE_ARN).
+// whether it went out. It takes calls signed with madAuth's webhook key (v1a, checked with the public keys from
+// WEBHOOK_KEYS_URL) or with WEBHOOK_SECRET (v1), or, behind a Function URL with AWS_IAM auth, only those of madAuth's
+// role (MADAUTH_ROLE_ARN).
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
-import { verifyWebhook } from '@madauth/server/webhook';
+import { verifyWebhook, webhookKeys, type WebhookKeys } from '@madauth/server/webhook';
 import type { LambdaFunctionURLEvent, LambdaFunctionURLEventWithIAMAuthorizer, LambdaFunctionURLResult } from 'aws-lambda';
 import { alreadyRegisteredMail, noPasswordMail, resetPasswordMail, signInMail, smsText, type Mail, verifyEmailMail } from './templates.js';
 
 /**
- * Who may call: whoever signs the calls with the secret, or, behind a Function URL with AWS_IAM auth, madAuth's role
- * only. AWS checks the role's signature before this function runs, so no secret is needed.
+ * Who may call: whoever signs the calls with madAuth's webhook key (v1a) or the shared secret (v1), or, behind a
+ * Function URL with AWS_IAM auth, madAuth's role only. AWS checks the role's signature before this function runs, so
+ * no secret is needed.
  */
 export type Caller =
-  /** The same WEBHOOK_SECRET madAuth uses. */
-  | { secret: string }
+  /**
+   * `webhookKeysUrl`: madAuth's `<MADAUTH_ISSUER>/.well-known/webhook-keys.json`, whose public keys check the `v1a`
+   * signatures; `secret`: the same WEBHOOK_SECRET madAuth uses, for `v1`. At least one; with both, either signature
+   * is accepted (while moving from the secret to the keys).
+   */
+  | { webhookKeysUrl: string; secret?: string }
+  | { webhookKeysUrl?: string; secret: string }
   /** The ARN of the role madAuth signs its calls with (WEBHOOK_AUTH=aws-iam), e.g. `arn:aws:iam::123456789012:role/madauth-server`. */
   | { madauthRoleArn: string };
 
@@ -28,6 +35,8 @@ export type MailerOptions = Caller & {
   sns?: Pick<SNSClient, 'send'>;
   /** Optional sender name shown instead of a number, where carriers support it (SNS `AWS.SNS.SMS.SenderID`). */
   smsSenderId?: string;
+  /** Fetches madAuth's keys from `webhookKeysUrl`; the global fetch by default. */
+  fetch?: typeof fetch;
 };
 
 /** A role's partition, account and name. An assumed role's ARN has no path, so a role is known by these. */
@@ -51,11 +60,26 @@ function roleOf(pattern: RegExp, arn: string): Role | null {
 // Role names are unique regardless of case, so a role named with other cases is still the same role.
 const sameRole = (a: Role, b: Role): boolean => a.partition === b.partition && a.account === b.account && a.name.toLowerCase() === b.name.toLowerCase();
 
-/** How a call is checked, made once from the options: a malformed MADAUTH_ROLE_ARN refuses every call with 500. */
-type Gate = { secret: string } | { role: Role; arn: string } | { problem: string };
+/** How a call is checked, made once from the options: a malformed MADAUTH_ROLE_ARN or WEBHOOK_KEYS_URL refuses every call with 500. */
+type Gate = { keys?: WebhookKeys; secret?: string } | { role: Role; arn: string } | { problem: string };
 
-function gateOf(caller: Caller): Gate {
-  if (!('madauthRoleArn' in caller)) return { secret: caller.secret };
+/** Whether madAuth's keys may be fetched from `url`: https (the keys decide which calls are madAuth's). */
+const isHttps = (url: string): boolean => URL.canParse(url) && new URL(url).protocol === 'https:';
+
+function gateOf(caller: Caller, fetchImpl?: typeof fetch): Gate {
+  if (!('madauthRoleArn' in caller)) {
+    const { webhookKeysUrl, secret } = caller;
+    if (!webhookKeysUrl && !secret) return { problem: 'Set WEBHOOK_KEYS_URL (madAuth 0.7.5 or newer), WEBHOOK_SECRET or MADAUTH_ROLE_ARN: nothing checks the calls.' };
+    if (webhookKeysUrl && !isHttps(webhookKeysUrl)) {
+      return { problem: `WEBHOOK_KEYS_URL must be https, e.g. https://example.com/.well-known/webhook-keys.json, but is "${webhookKeysUrl}".` };
+    }
+    // verifyWebhook rejects a malformed secret silently, which would look like a wrong signature on every call.
+    if (secret && !secret.startsWith('whsec_')) return { problem: 'WEBHOOK_SECRET must start with "whsec_": copy it exactly as the madAuth server has it.' };
+    const keys = webhookKeysUrl ? webhookKeys(webhookKeysUrl, { fetch: fetchImpl }) : undefined;
+    // Fetched now, while the function starts, so the first call doesn't wait for it; a failure is logged and retried at the call.
+    void keys?.keys();
+    return { keys, secret };
+  }
   const role = roleOf(ROLE_ARN, caller.madauthRoleArn);
   return role
     ? { role, arn: caller.madauthRoleArn }
@@ -71,7 +95,7 @@ function iamCallerOf(event: LambdaFunctionURLEvent): { userArn: string } | undef
 }
 
 /** Whether a call is madAuth's; if not, the answer and what the log says. */
-function checkCaller(gate: Gate, event: LambdaFunctionURLEvent, body: string): { ok: true } | { ok: false; statusCode: 401 | 403 | 500; log: string } {
+async function checkCaller(gate: Gate, event: LambdaFunctionURLEvent, body: string): Promise<{ ok: true } | { ok: false; statusCode: 401 | 403 | 500 | 503; log: string }> {
   if ('problem' in gate) return { ok: false, statusCode: 500, log: gate.problem };
   if ('role' in gate) {
     const iam = iamCallerOf(event);
@@ -84,8 +108,17 @@ function checkCaller(gate: Gate, event: LambdaFunctionURLEvent, body: string): {
     }
     return { ok: true };
   }
-  if (!verifyWebhook(gate.secret, event.headers, body)) {
-    return { ok: false, statusCode: 401, log: 'Rejected a call with a wrong signature. Do madAuth and this function use the same WEBHOOK_SECRET?' };
+  if (!(await verifyWebhook(gate, event.headers, body))) {
+    // Without any of madAuth's keys (their fetch failed: logged above), the call may be madAuth's all the same: not 401,
+    // so madAuth's log doesn't take it for a wrong signature.
+    if (gate.keys && !(await gate.keys.keys()).length) {
+      return { ok: false, statusCode: 503, log: "Rejected a call: madAuth's webhook keys could not be fetched from WEBHOOK_KEYS_URL (see the error above), so no v1a signature can be checked." };
+    }
+    const why = [
+      gate.keys && 'is WEBHOOK_KEYS_URL the /.well-known/webhook-keys.json of this madAuth server, and does it list a key?',
+      gate.secret && 'do madAuth and this function use the same WEBHOOK_SECRET?',
+    ].filter(Boolean);
+    return { ok: false, statusCode: 401, log: `Rejected a call with a wrong signature: ${why.join(' Or ')}` };
   }
   return { ok: true };
 }
@@ -136,13 +169,13 @@ function mailFor({ type, data }: Call): Mail | null {
 }
 
 export function createMailer(options: MailerOptions) {
-  const gate = gateOf(options);
+  const gate = gateOf(options, options.fetch);
   return async (event: LambdaFunctionURLEvent): Promise<LambdaFunctionURLResult> => {
     // Verify the raw body exactly as it arrived: re-serialized JSON would not match the signature.
     const body = event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : (event.body ?? '');
-    const check = checkCaller(gate, event, body);
+    const check = await checkCaller(gate, event, body);
     if (!check.ok) {
-      (check.statusCode === 500 ? console.error : console.warn)(check.log);
+      (check.statusCode >= 500 ? console.error : console.warn)(check.log);
       return { statusCode: check.statusCode };
     }
     let call: Call | null;
@@ -224,14 +257,24 @@ async function sendSms(options: MailerOptions, data: Record<string, any>): Promi
   return { statusCode: 200 };
 }
 
-/** Who may call, from MADAUTH_ROLE_ARN or WEBHOOK_SECRET. Both at once is refused: the secret would only be in the way. */
+/**
+ * Who may call, from MADAUTH_ROLE_ARN, or from WEBHOOK_KEYS_URL and WEBHOOK_SECRET (either or both). The role with
+ * either of the others is refused: they would only be in the way.
+ */
 export function callerFromEnv(env: Record<string, string | undefined>): Caller | { problem: string } {
   const roleArn = env.MADAUTH_ROLE_ARN?.trim();
-  const secret = env.WEBHOOK_SECRET?.trim();
-  if (roleArn && secret) {
-    return { problem: 'Both MADAUTH_ROLE_ARN and WEBHOOK_SECRET are set: with MADAUTH_ROLE_ARN, AWS checks the caller and no secret is used. Remove WEBHOOK_SECRET.' };
+  const secret = env.WEBHOOK_SECRET?.trim() || undefined;
+  const webhookKeysUrl = env.WEBHOOK_KEYS_URL?.trim() || undefined;
+  const others = [webhookKeysUrl && 'WEBHOOK_KEYS_URL', secret && 'WEBHOOK_SECRET'].filter((name): name is string => !!name);
+  if (roleArn && others.length) {
+    return {
+      problem: `Both MADAUTH_ROLE_ARN and ${others.join(' and ')} are set: with MADAUTH_ROLE_ARN, AWS checks the caller and no signature is checked. Remove ${others.join(' and ')}.`,
+    };
   }
-  return roleArn ? { madauthRoleArn: roleArn } : { secret: secret ?? '' };
+  if (roleArn) return { madauthRoleArn: roleArn };
+  if (webhookKeysUrl) return { webhookKeysUrl, secret };
+  if (secret) return { secret };
+  return { problem: 'Set WEBHOOK_KEYS_URL (madAuth 0.7.5 or newer), WEBHOOK_SECRET or MADAUTH_ROLE_ARN: nothing checks the calls.' };
 }
 
 const caller = callerFromEnv(process.env);

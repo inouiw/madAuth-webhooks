@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { verifyWebhook } from '@madauth/server/webhook';
+import { verifyWebhook, type WebhookKeys } from '@madauth/server/webhook';
 
+/** How calls are checked: `v1a` with madAuth's published keys, `v1` with the shared secret, or either. */
 export interface ReceiverOptions {
-  /** The same WEBHOOK_SECRET madAuth uses. */
-  secret: string;
+  /** madAuth's public keys, from `webhookKeys(WEBHOOK_KEYS_URL)`: a call with a valid `v1a` signature is accepted. */
+  keys?: WebhookKeys;
+  /** The same WEBHOOK_SECRET madAuth uses: a call with a valid `v1` signature is accepted. */
+  secret?: string;
   /** If set, only these e-mail domains may sign up (answers user.signing_up, signup.before before madAuth 0.5). */
   allowedDomains?: string[];
   /** Where to print; the terminal by default. */
@@ -68,8 +71,12 @@ export function createReceiver(options: ReceiverOptions) {
     } catch {
       return; // The client went away mid-request; there is no one to answer.
     }
-    if (!verifyWebhook(options.secret, req.headers, body)) {
-      log('[webhook] Rejected a call with a wrong signature. Do madAuth and this receiver use the same WEBHOOK_SECRET?');
+    if (!(await verifyWebhook({ keys: options.keys, secret: options.secret }, req.headers, body))) {
+      const why = [
+        options.keys && 'is WEBHOOK_KEYS_URL the /.well-known/webhook-keys.json of this madAuth server, and does it list a key?',
+        options.secret && 'do madAuth and this receiver use the same WEBHOOK_SECRET?',
+      ].filter(Boolean);
+      log(`[webhook] Rejected a call with a wrong signature: ${why.join(' Or ')}`);
       return reply(401);
     }
     const call = parseCall(body);

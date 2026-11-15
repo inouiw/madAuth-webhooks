@@ -26,16 +26,16 @@ cd madAuth-webhooks/dev-receiver && npm install
 ```
 
 ```bash
-WEBHOOK_URL=http://localhost:8790/webhook WEBHOOK_SECRET=whsec_... npm run dev
+WEBHOOK_URL=http://localhost:8790/webhook npm run dev
 ```
 
-Use the `WEBHOOK_SECRET` from your server's `.env`. Sign up in your app, and the confirmation e-mail appears in this terminal.
+No secret is needed: madAuth signs every call with its webhook key, and the receiver checks the signature with the public key it fetches from `http://localhost:8787/.well-known/webhook-keys.json` (`WEBHOOK_KEYS_URL`). Sign up in your app, and the confirmation e-mail appears in this terminal.
 
 ## What every receiver does
 
 A receiver is a small HTTP endpoint. The ones here follow the same rules, and yours should too:
 
-1. **Verify the signature first, on the raw body.** Calls are signed in the [Standard Webhooks](https://www.standardwebhooks.com/) format. In JavaScript, `verifyWebhook` from `@madauth/server/webhook` does it; other languages can use a Standard Webhooks library. Answer `401` to anything else. On AWS, a Lambda function can let IAM check the calls instead (`WEBHOOK_AUTH=aws-iam`): it answers `401` to a call without IAM authentication and `403` to any caller but madAuth's role, see [the aws-ses-mailer](aws-ses-mailer#aws-iam-instead-of-the-secret).
+1. **Verify the signature first, on the raw body.** Calls are signed in the [Standard Webhooks](https://www.standardwebhooks.com/) format: `v1a` with madAuth's Ed25519 webhook key, whose public keys madAuth publishes at `<MADAUTH_ISSUER>/.well-known/webhook-keys.json`, and `v1` with `WEBHOOK_SECRET` if the server has one. In JavaScript, `verifyWebhook` with `webhookKeys` from `@madauth/server/webhook` (madAuth 0.7.5 or newer) does it, see [Signatures](https://github.com/inouiw/madAuth/blob/main/docs/server.md#signatures); other languages can use a Standard Webhooks library. Answer `401` to anything else. On AWS, a Lambda function can let IAM check the calls instead (`WEBHOOK_AUTH=aws-iam`): it answers `401` to a call without IAM authentication and `403` to any caller but madAuth's role, see [the aws-ses-mailer](aws-ses-mailer#aws-iam-instead-of-the-secret).
 2. **Answer 2xx to an e-mail or SMS only once it is on its way**, e.g. after your mail or SMS service accepted it. madAuth waits for the answer and tells the user if it could not be sent.
 3. **Answer within 10 seconds** (5 seconds for events such as `user.signed_up`). madAuth does not retry.
 4. **Answer `204` to types you don't handle.** madAuth only sends the types listed in its `WEBHOOK_EVENTS`, so list what your receiver handles there.

@@ -3,18 +3,24 @@ Transform: AWS::Serverless-2016-10-31
 Description: madAuth webhook receiver that sends madAuth's e-mails with Amazon SES, and its SMS codes with Amazon SNS.
 
 Parameters:
+  WebhookKeysUrl:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(https://\S+)?$'
+    ConstraintDescription: an https URL, e.g. https://example.com/.well-known/webhook-keys.json, or empty.
+    Description: The madAuth server's <MADAUTH_ISSUER>/.well-known/webhook-keys.json (madAuth 0.7.5 or newer). Calls signed with its webhook key (v1a) are accepted, checked with these public keys alone; no secret is shared. Empty with MadauthRoleArn.
   WebhookSecret:
     Type: String
     NoEcho: true
     Default: ''
-    Description: The same WEBHOOK_SECRET as the madAuth server (npx @madauth/server generate-webhook-secret). Empty with MadauthRoleArn.
+    Description: The same WEBHOOK_SECRET as the madAuth server, for calls signed with it (v1), e.g. of a server without a webhook key. Next to WebhookKeysUrl while moving to it; empty with MadauthRoleArn.
   MadauthRoleArn:
     Type: String
     Default: ''
     # As the function checks it: IAM's characters in the path and the name.
     AllowedPattern: '^(arn:[\w-]+:iam::\d{12}:role/([\w+=,.@-]+/)*[\w+=,.@-]+)?$'
     ConstraintDescription: a role's ARN, e.g. arn:aws:iam::123456789012:role/madauth-server, or empty.
-    Description: Instead of WebhookSecret, for a madAuth server on AWS with WEBHOOK_AUTH=aws-iam in this account, the ARN of its role. The URL then has AWS_IAM auth and only this role's calls are accepted.
+    Description: Instead of WebhookKeysUrl and WebhookSecret, for a madAuth server on AWS with WEBHOOK_AUTH=aws-iam in this account, the ARN of its role. The URL then has AWS_IAM auth and only this role's calls are accepted.
   MailFrom:
     Type: String
     Description: Sender, e.g. "Example" <no-reply@example.com>. Its domain must be verified in SES.
@@ -46,10 +52,10 @@ Conditions:
 Rules:
   OneCaller:
     Assertions:
-      - Assert: !Not [!And [!Equals [!Ref WebhookSecret, ''], !Equals [!Ref MadauthRoleArn, '']]]
-        AssertDescription: Set WebhookSecret, or MadauthRoleArn for a madAuth server with WEBHOOK_AUTH=aws-iam.
-      - Assert: !Or [!Equals [!Ref WebhookSecret, ''], !Equals [!Ref MadauthRoleArn, '']]
-        AssertDescription: Set WebhookSecret or MadauthRoleArn, not both. With MadauthRoleArn, AWS checks the caller and no secret is used.
+      - Assert: !Not [!And [!Equals [!Ref WebhookKeysUrl, ''], !Equals [!Ref WebhookSecret, ''], !Equals [!Ref MadauthRoleArn, '']]]
+        AssertDescription: Set WebhookKeysUrl (or WebhookSecret), or MadauthRoleArn for a madAuth server with WEBHOOK_AUTH=aws-iam.
+      - Assert: !Or [!And [!Equals [!Ref WebhookKeysUrl, ''], !Equals [!Ref WebhookSecret, '']], !Equals [!Ref MadauthRoleArn, '']]
+        AssertDescription: Set MadauthRoleArn alone, without WebhookKeysUrl and WebhookSecret. With MadauthRoleArn, AWS checks the caller and no signature is checked.
 
 Resources:
   MailerFunction:
@@ -63,6 +69,7 @@ Resources:
       Timeout: 8
       Environment:
         Variables:
+          WEBHOOK_KEYS_URL: !Ref WebhookKeysUrl
           WEBHOOK_SECRET: !Ref WebhookSecret
           MADAUTH_ROLE_ARN: !Ref MadauthRoleArn
           MAIL_FROM: !Ref MailFrom
@@ -108,7 +115,7 @@ Resources:
   # The URL madAuth calls. With MadauthRoleArn it has AWS_IAM auth: AWS refuses a call that isn't signed by a principal
   # allowed to invoke it before the function runs (madAuth's role gets that permission from its own policy, e.g. from
   # webhookFunctionArn of madAuth's AWS template), and the function accepts only that role. Without, it is public, and
-  # the function checks every call against WebhookSecret.
+  # the function checks every call's signature: v1a with the keys of WebhookKeysUrl, v1 with WebhookSecret.
   MailerFunctionUrl:
     Type: AWS::Lambda::Url
     Properties:
